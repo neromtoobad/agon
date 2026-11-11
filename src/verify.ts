@@ -2,7 +2,7 @@ import { parseAbi } from "viem";
 import { writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { db, setMeta } from "./db.ts";
-import { DB_PATH, UA } from "./config.ts";
+import { DB_PATH, UA, network } from "./config.ts";
 import { client, readLive } from "./chain.ts";
 
 const FACTORY_ABI = parseAbi(["function getTotalMarketProxiesCount() view returns (uint256)"]);
@@ -58,6 +58,22 @@ export async function verify(args: string[] = []) {
   }
   add("replayed probabilities vs contract", worst < 1e-4, `${compared} open markets, largest gap ${worst.toExponential(2)}${worstAt ? ` at ${worstAt}` : ""}`);
   add("derived status vs contract", statusBad.length === 0, `${statusN} markets, ${statusBad.length} differ${statusBad.length ? `: ${statusBad.slice(0, 4).join("; ")}` : ""}`);
+
+  // 2b. The official Delphi SDK, pointed at the gateway the index names, reads the same status and can quote a trade.
+  if (!args.includes("--offline")) {
+    const sdk = await import("./delphi.ts");
+    const sample = db.prepare(`SELECT address, gateway, status FROM (SELECT address, gateway, status, ROW_NUMBER() OVER (PARTITION BY gateway ORDER BY volume DESC) rn FROM markets WHERE status = 'open' AND gateway IS NOT NULL) WHERE rn <= 2`).all() as any[];
+    let sdkBad = 0; const notes: string[] = [];
+    for (const m of sample) {
+      try {
+        const st = await sdk.sdkStatus(m.address), q = await sdk.quoteBudget(m.address, 0, 1);
+        if (st !== m.status || !q || !(q.cost_usd > 0)) { sdkBad++; notes.push(`${m.address} status ${st}, cost ${q?.cost_usd}`); }
+      } catch (e) { sdkBad++; notes.push(`${m.address} ${String((e as any).shortMessage ?? (e as Error).message).slice(0, 80)}`); }
+    }
+    const open = (db.prepare("SELECT COUNT(*) n FROM markets WHERE status='open'").get() as any).n;
+    const unlisted = (db.prepare(`SELECT COUNT(*) n FROM markets WHERE status='open' AND gateway NOT IN (${network.listed.sdk.gateways.map(() => "?").join(",")})`).get(...network.listed.sdk.gateways.map((g) => g.toLowerCase())) as any).n;
+    add("Delphi SDK agrees with the index", sdkBad === 0, `${sample.length} open markets on ${new Set(sample.map((m) => m.gateway)).size} gateways: status and a $1 quote read through the SDK, ${sdkBad} disagree${notes.length ? `: ${notes.slice(0, 3).join("; ")}` : ""}. ${unlisted} of ${open} open markets are on a gateway the SDK's own defaults do not name`);
+  }
 
   // 3. Event counts equal Gensyn's published subgraphs for the two gateways those subgraphs cover.
   if (!args.includes("--offline")) {

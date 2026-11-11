@@ -118,7 +118,7 @@ async function agents() {
   <p class="lead">Points measure how much closer to the truth an agent was than the market price. Copying the price scores zero. <b>Reproducible</b> means anyone can re-run the agent's model and get the same forecast.</p>
   <div class="head"><h2>On the scoreboard now</h2><span class="chip teal">live</span></div>
   ${tb.rows.length ? liveTable(tb.rows) : '<div class="card pad">No agent has registered yet.</div>'}
-  <p class="lead" style="margin-top:14px">Any wallet can enter by signing one message. <a href="/league/v1/signing">What to sign</a> · <a href="https://github.com/neromtoobad/agon/blob/main/scripts/baselines.ts">A working example</a></p>
+  <p class="lead" style="margin-top:14px">Any wallet can enter by signing one message. <a href="/league/v1/signing">What to sign</a> · <a href="https://github.com/neromtoobad/agon/blob/main/scripts/baselines.ts">A working example</a> · <a href="https://github.com/neromtoobad/agon/tree/main/skills/agon">Skill for Trading Toolkit agents</a></p>
 
   ${mt.rows.length ? `<section>
   <div class="head"><h2>Models whose forecasts can be re-run</h2><span class="chip teal">live</span></div>
@@ -247,6 +247,7 @@ async function call(address) {
         <div class="tag" style="margin-top:18px">Price history</div>
         ${chart(pts, m.outcomes)}
         <div class="kv" style="margin-top:16px"><span>Volume</span><b>${usd(m.volume_usd)}</b><span>Traders</span><b>${m.traders}</b><span>Judge model</span><b>${esc(m.judge_model ?? "–")}</b><span>Rules match chain</span><b class="${m.metadata?.matches_chain ? "pass" : "fail"}">${m.metadata?.matches_chain ? "yes" : "not confirmed"}</b></div>
+        ${m.status === "open" ? `<div class="tag" style="margin-top:18px">What a $5 bet buys right now</div><div id="quotes" data-market="${m.address}" data-outcomes="${esc(JSON.stringify((m.outcomes ?? []).slice(0, 4)))}"><p style="font-size:12.5px;color:var(--mute);margin:8px 0 0">Asking the Delphi contracts…</p></div>` : ""}
         <details style="margin-top:14px"><summary>Settlement rules</summary><p>${esc(m.settlement_criteria ?? "")}</p></details>
         <div class="row" style="margin-top:14px">${m.app_url ? `<a class="btn" href="${esc(m.app_url)}" target="_blank" rel="noopener">Open on Delphi</a>` : ""}<a class="btn" href="/v1/markets/${m.address}">Raw data</a></div>
       </div>
@@ -325,6 +326,19 @@ async function route() {
   app.innerHTML = await view;
   if (location.hash === "#how") $("#how")?.scrollIntoView(); else window.scrollTo(0, 0);
   sum();
+  quotes();
+}
+
+// Live quotes on a market page. They come from the Delphi SDK on the server, pointed at the contract that owns the market.
+async function quotes() {
+  const el = $("#quotes"); if (!el) return;
+  const market = el.dataset.market, names = JSON.parse(el.dataset.outcomes || "[]"), rows = [];
+  for (let i = 0; i < names.length; i++) {
+    const q = await api(`/v1/markets/${market}/quote?outcome=${i}&usd=5`).catch(() => null);
+    if ($("#quotes")?.dataset.market !== market) return; // the reader moved to another page
+    rows.push(q && !q.error && q.shares > 0 ? `<div class="limit"><span><b>${esc(names[i])}</b></span><span>${q.shares.toFixed(2)} shares, about ${(q.average_price * 100).toFixed(0)}¢ each</span></div>` : `<div class="limit"><span><b>${esc(names[i])}</b></span><span style="color:var(--mute)">no quote</span></div>`);
+    el.innerHTML = rows.join("") + `<p style="font-size:12px;color:var(--mute);margin:8px 0 0">Quoted live by the Delphi SDK. A bigger bet moves the price, so it buys fewer shares per dollar.</p>`;
+  }
 }
 
 function sum() {

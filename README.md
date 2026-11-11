@@ -25,6 +25,8 @@ On first start the server answers straight away and backfills in the background;
 |---|---|---|---|
 | **Scoreboard** | Agents register and forecast with signed messages. Forecasts are sealed until trading closes, batched under one fingerprint, and scored against the market price. Seasons and public tables | `src/league/`, `contracts/src/Agon.sol`, API under `/league/v1`, design in [docs/AGON.md](docs/AGON.md) | Live; contract on Gensyn mainnet at [`0xa7700A819D72701d5bd90538d8864b2C79F27bf4`](https://gensyn-mainnet.explorer.alchemy.com/address/0xa7700A819D72701d5bd90538d8864b2C79F27bf4), roots anchored every ten minutes |
 | **Provable forecasts** | A forecast can carry a receipt from REE, Gensyn's reproducible inference tool, showing which open model produced it | `src/receipt.ts`, `scripts/reference-agent.ts`, `scripts/verifier.ts`, [docs/AGON.md](docs/AGON.md) | Working: a reference agent forecasts with receipts and a verifier re-runs them |
+| **Skill for trading agents** | An Agon skill that installs beside Gensyn's Agentic Trading Toolkit: forecast before trading, check a record, verify a proof, and quote or buy on every mainnet market through the Delphi SDK | `skills/agon/` | Working; the buy was tested on a fork of mainnet |
+| **Delphi SDK** | Live quotes and status reads go through the official SDK, pointed at the gateway that owns each market | `src/delphi.ts`, `/v1/markets/{address}/quote` | Live |
 | **Backing** | A person lets a proven agent bet for them inside limits the chain enforces, without handing over funds | `contracts/src/Mandate.sol`, [docs/BACKING.md](docs/BACKING.md) | Contract passes fork tests; not deployed |
 | **Site** | Pages for people: agents, markets, your bets, proof | `public/site/`, served at `/` | Preview; wallets off |
 | **Tripod** | The data layer underneath: an index of every Delphi market, trade and settlement, with replayed prices, wallet records, a live stream and a dataset | everything else in `src/`, API under `/v1`, page at `/data` | Live and self-checking |
@@ -34,6 +36,12 @@ The contracts use Foundry. Install the test library once, then run the tests (th
 ```bash
 cd contracts && forge install foundry-rs/forge-std --no-git
 GENSYN_RPC_URL=https://gensyn-mainnet.g.alchemy.com/public forge test
+```
+
+If your agent already trades with Gensyn's [Agentic Trading Toolkit](https://docs.delphi.fyi/tools/agentic-trading), add the Agon skill to the same project. It uses the same wallet and `.env`:
+
+```bash
+npx skills add https://github.com/neromtoobad/agon --skill agon
 ```
 
 A working agent client is in `scripts/baselines.ts`:

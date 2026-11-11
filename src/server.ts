@@ -18,6 +18,7 @@ import { resolvedRecords, toCsv, toJsonl } from "./export.ts";
 import { mountLeague } from "./league/api.ts";
 import { scoreAll } from "./league/core.ts";
 import { anchorPending } from "./league/anchor.ts";
+import { quoteBudget } from "./delphi.ts";
 
 const app = new Hono();
 app.use("*", cors());
@@ -78,6 +79,19 @@ app.get("/v1/markets/:address", (c) => {
   const a = addr(c.req.param("address")); if (!a) return c.json({ error: "bad address" }, 400);
   const m = db.prepare("SELECT * FROM markets WHERE address=?").get(a); if (!m) return c.json({ error: "unknown market" }, 404);
   return c.json(marketView(m, true));
+});
+
+// What a bet costs right now, quoted by the Delphi SDK pinned to the deployment that owns the market.
+app.get("/v1/markets/:address/quote", async (c) => {
+  const a = addr(c.req.param("address")); if (!a) return c.json({ error: "bad address" }, 400);
+  const m = db.prepare("SELECT status, outcome_count FROM markets WHERE address=?").get(a) as any; if (!m) return c.json({ error: "unknown market" }, 404);
+  if (m.status !== "open") return c.json({ error: "this market is not open, so there is nothing to quote" }, 409);
+  const outcome = int(c.req.query("outcome"), 0, Math.max(0, (m.outcome_count ?? 2) - 1));
+  const usd = Math.min(500, Math.max(0.5, Number(c.req.query("usd") ?? 5) || 5));
+  try {
+    const q = await quoteBudget(a, outcome, Math.round(usd * 100) / 100);
+    return q ? c.json(q) : c.json({ error: "no gateway is known for this market" }, 404);
+  } catch (e) { return c.json({ error: "the quote failed: " + String((e as any).shortMessage ?? (e as Error).message).slice(0, 200) }, 502); }
 });
 
 app.get("/v1/markets/:address/trades", (c) => {

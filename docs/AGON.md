@@ -286,3 +286,47 @@ The contract is deployed on Gensyn mainnet at [`0xa7700A819D72701d5bd90538d8864b
 
 To check any forecast yourself: fetch its proof, then call `verify(chain_batch, leaf, proof)` on the contract with any Gensyn RPC.
 
+## 13. The Delphi SDK and the Agentic Trading Toolkit (11 Nov 2026)
+
+Agon now uses both of Gensyn's developer tools, and fixes a gap in them along the way.
+
+**The gap.** The SDK's default client knows two Delphi deployments. Live trading on mainnet also runs through an LMSR gateway and factory it does not name. On those markets the default client fails (`marketStatus reverted`), and so does the Toolkit's own `quote-buy.ts`. On 11 Nov that was 40 of 66 open markets. Agon's index knows which gateway and factory own every market, so it hands those to the SDK.
+
+**In the server.** `src/delphi.ts` builds an SDK client pinned to the owning deployment. Two things use it:
+
+- `GET /v1/markets/{address}/quote?outcome=0&usd=5` answers "what does a $5 bet buy right now" with the SDK's `quoteBuy`. The market page shows it for each outcome.
+- A new self-check reads status and a $1 quote through the SDK for two open markets on every gateway and compares them with the index.
+
+**For Toolkit agents.** `skills/agon/` is a skill in the same format as Gensyn's Delphi skill, made to install beside it (`npx skills add https://github.com/neromtoobad/agon --skill agon`). It uses the same wallet, `.env` and SDK, and imports nothing from the Agon server.
+
+| Script | What it does |
+|---|---|
+| `agon-fixtures.ts` | Lists the markets that count. Needs no Delphi API key |
+| `agon-register.ts` | Puts the wallet on the scoreboard |
+| `agon-forecast.ts` | Publishes a signed, sealed forecast. Takes the same arguments as the Toolkit's `compute-edge.ts` |
+| `agon-record.ts` | Shows any agent's points, rank and recent forecasts |
+| `agon-proof.ts` | Asks the Agon contract on chain whether a forecast is in its batch |
+| `agon-quote.ts` | Quotes a bet of a given size on any mainnet market |
+| `agon-buy.ts` | Buys through the SDK, and refuses unless the wallet has a forecast for that market |
+
+### Test record
+
+The skill was copied into a fresh clone of `gensyn-ai/gensyn-delphi-skills` with its own dependencies (SDK 2.1.0) and run from there with a throwaway wallet, against a local Agon server and a fork of Gensyn mainnet.
+
+| Test | Result |
+|---|---|
+| SDK default client on one market from each gateway | Worked on both pari-mutuel gateways, failed on the LMSR gateway |
+| The same SDK with the gateway and factory from Agon's index | Worked on the LMSR market |
+| Toolkit's own `quote-buy.ts` on an LMSR market | Failed with a contract error |
+| `agon-quote.ts` on the same market | $5 buys 9.47 shares at about 53 cents each |
+| `agon-forecast.ts` before registering | Refused, with the instruction to register |
+| `agon-register.ts`, then `agon-forecast.ts` in both argument forms | Accepted, sealed until the market's close |
+| `agon-buy.ts` with no forecast for the market | Refused |
+| `agon-buy.ts` after a forecast, $5 on the fork | Approved USDC and bought 9.47 shares for 4.99 USDC; the gateway shows the shares in the wallet |
+| `agon-proof.ts` on forecast 195 against the public scoreboard and the real chain | The contract confirmed it |
+| `agon-proof.ts` on a forecast not yet anchored | Says so, and to try again in ten minutes |
+| `npx skills add` pointed at the repo | Finds one skill, `agon` |
+| Self-check | 22 of 22 with the SDK check |
+
+Not tested: a buy with real money on mainnet (the fork has the real contracts and state, but pretend USDC), and the Coinbase server-wallet signer.
+

@@ -19,6 +19,7 @@
     "status": "node src/cli.ts status"
   },
   "dependencies": {
+    "@gensyn-ai/gensyn-delphi-sdk": "^2.1.0",
     "@hono/node-server": "^2.1.6",
     "hono": "^4.13.17",
     "viem": "^2.57.17"
