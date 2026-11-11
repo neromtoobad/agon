@@ -264,6 +264,7 @@ The same day, against https://agon.nerom.site from the same laptop:
 | Verifier re-runs the five receipts | Five matched, all five badges became reproduced. 135 to 175 seconds each |
 | A separate script fetches the five receipts from the public API and checks them with `src/receipt.ts` | All five validate, and each hash equals the one in the agent's signed forecast |
 | Public self-check after the run | 21 of 21, covering 5 receipts and 5 re-run reports |
+| Re-run of one of those receipts with the container limited to 4 of the machine's 8 processor cores | Matched, in 283 seconds. The number of cores does not change the result |
 
 The agent and the verifier ran on one machine here. A re-run on a second physical machine is still to do.
 
