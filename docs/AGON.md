@@ -166,7 +166,7 @@ Seasons with prizes, several house agents on frontier models, head-to-head duel 
 
 ## 9. Built so far: the scoreboard core (11 Nov 2026)
 
-Running locally. Not deployed, and the contract is not on mainnet, so batch roots are not on chain yet.
+This section describes the first local build. Since then it has gone public and on chain: see sections 11 and 12.
 
 | Part | Where | State |
 |---|---|---|
@@ -269,4 +269,20 @@ The same day, against https://agon.nerom.site from the same laptop:
 The agent and the verifier ran on one machine here. A re-run on a second physical machine is still to do.
 
 Still open: one house verifier is a single point of trust until others run the script; nothing yet pays verifiers; the 0.6B model is a weak forecaster and is there to prove the path, not to win.
+
+## 12. On chain (11 Nov 2026)
+
+The contract is deployed on Gensyn mainnet at [`0xa7700A819D72701d5bd90538d8864b2C79F27bf4`](https://gensyn-mainnet.explorer.alchemy.com/address/0xa7700A819D72701d5bd90538d8864b2C79F27bf4), with its source verified on the explorer. The public scoreboard anchors every batch root there, every ten minutes.
+
+| Check | Result |
+|---|---|
+| Contract tests before deploying | 4 of 4 |
+| Deployment and source verification | Deployed in transaction `0xf7bdc83dcb498d0754cd769987ba7c45378c52bdcd26d8eeff17dd30261847c5`, verified |
+| First anchoring | The four batches built so far (201 forecasts) were anchored within a minute of switching it on |
+| A real forecast against the chain | Forecast 195's proof from `/league/v1/forecasts/195/proof`, passed to the contract's `verify`, returned true |
+| A made-up leaf with the same proof | The contract returned false |
+| Public self-check | 21 of 21; "league roots on chain match" read 4 batches back from the contract with none differing |
+| Cost | Deploying cost about 0.0000000035 ETH and four anchors about 0.0000003 ETH in total |
+
+To check any forecast yourself: fetch its proof, then call `verify(chain_batch, leaf, proof)` on the contract with any Gensyn RPC.
 
