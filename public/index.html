@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tripod · open data for Delphi</title>
+<style>
+  :root { --bg:#fbfaf7; --ink:#16181d; --mute:#6a6f7a; --line:#e4e1d8; --card:#fff; --accent:#0b6b4f; --warn:#a4470c; }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
+  main { max-width:980px; margin:0 auto; padding:40px 20px 80px }
+  h1 { font-size:28px; margin:0 0 6px; letter-spacing:-.01em }
+  h2 { font-size:15px; margin:36px 0 10px; text-transform:none; color:var(--mute); font-weight:600 }
+  p.lead { margin:0 0 24px; color:var(--mute); max-width:62ch }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px }
+  .stat b { display:block; font-size:22px; font-variant-numeric:tabular-nums }
+  .stat span { color:var(--mute); font-size:13px }
+  table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden; font-variant-numeric:tabular-nums }
+  th,td { text-align:left; padding:8px 12px; border-bottom:1px solid var(--line); font-size:14px; vertical-align:top }
+  th { color:var(--mute); font-weight:600; font-size:12.5px } tr:last-child td { border-bottom:0 }
+  td.n, th.n { text-align:right } code, .mono { font:13px ui-monospace,SFMono-Regular,Menlo,monospace }
+  a { color:var(--accent); text-decoration:none } a:hover { text-decoration:underline }
+  .tag { display:inline-block; font-size:12px; padding:1px 7px; border-radius:99px; border:1px solid var(--line); color:var(--mute) }
+  .tag.warn { color:var(--warn); border-color:#e9c9ae; background:#fdf3ea } .tag.ok { color:var(--accent); border-color:#b9dccf; background:#eef8f4 }
+  .note { background:#fdf3ea; border:1px solid #e9c9ae; color:#6b3208; border-radius:10px; padding:10px 14px; margin-top:10px }
+  .scroll { overflow-x:auto } #live td { font-size:13.5px } .q { max-width:46ch }
+</style>
+</head>
+<body>
+<main>
+  <h1>Tripod</h1>
+  <p class="lead">Every Delphi market, trade and settlement on the Gensyn chain in one open API. No key. Replayed from chain events and checked against the contracts.</p>
+  <div class="stats" id="stats"></div>
+
+  <h2>Contracts found on chain</h2>
+  <div id="drift"></div>
+  <div class="scroll"><table id="registry"><thead><tr><th>Role</th><th>Pricing</th><th>Address</th><th>In official SDK</th><th class="n">Trades, 30 days</th><th>Last event</th></tr></thead><tbody></tbody></table></div>
+
+  <h2>Live events</h2>
+  <div class="scroll"><table id="live"><thead><tr><th>When</th><th>Event</th><th>Market</th><th class="n">USD</th><th class="n">Probability</th></tr></thead><tbody><tr><td colspan="5" style="color:var(--mute)">Waiting for the next on-chain event…</td></tr></tbody></table></div>
+
+  <h2>Most active open markets</h2>
+  <div class="scroll"><table id="markets"><thead><tr><th>Question</th><th>Leading outcome</th><th class="n">Volume</th><th class="n">Traders</th><th>Closes</th></tr></thead><tbody></tbody></table></div>
+
+  <h2>Wallet track records</h2>
+  <div class="scroll"><table id="board"><thead><tr><th>Wallet</th><th class="n">Resolved markets</th><th class="n">Profit</th><th class="n">Return</th><th class="n">Picked winner</th><th class="n">Brier</th></tr></thead><tbody></tbody></table></div>
+
+  <h2>Checks against the chain</h2>
+  <div class="scroll"><table id="checks"><thead><tr><th>Check</th><th>Result</th><th>Detail</th></tr></thead><tbody></tbody></table></div>
+
+  <h2>Endpoints</h2>
+  <table><tbody id="eps"></tbody></table>
+</main>
+<script>
+const $ = (s) => document.querySelector(s), esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+const j = (u) => fetch(u).then((r) => r.json()), usd = (n) => n == null ? "–" : "$" + Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
+const pct = (p) => p == null ? "–" : (p * 100).toFixed(1) + "%", short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
+const day = (s) => s ? new Date(s).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "–";
+async function load() {
+  const [st, reg, mk, lb] = await Promise.all([j("/v1/status"), j("/v1/registry"), j("/v1/markets?status=open&order=volume&limit=8"), j("/v1/leaderboard?by=pnl&limit=8")]);
+  $("#stats").innerHTML = [["Markets", st.markets], ["Open now", st.open_markets], ["Events", st.events], ["Wallets", st.wallets], ["Volume", usd(st.volume_usd)], ["Indexed to block", st.indexed_to_block]]
+    .map(([k, v]) => `<div class="stat"><b>${typeof v === "number" ? v.toLocaleString() : v}</b><span>${k}</span></div>`).join("");
+  const d = reg.drift;
+  $("#drift").innerHTML = d.through_unlisted_contracts ? `<div class="note">${pct(d.share_unlisted)} of trades in the last 30 days went through contracts that the official SDK defaults (${esc(reg.official_source.split(" ")[0])}) do not name.</div><br>` : "";
+  $("#registry tbody").innerHTML = reg.contracts.map((c) => `<tr><td>${c.role}</td><td>${c.mechanism === "lmsr" ? "LMSR" : "Pari-mutuel"}</td><td class="mono">${c.address}</td><td>${c.listed ? '<span class="tag ok">listed</span>' : '<span class="tag warn">not listed</span>'}</td><td class="n">${c.role === "gateway" ? c.trades_last_30d.toLocaleString() : ""}</td><td>${day(c.last_event_at)}</td></tr>`).join("");
+  $("#markets tbody").innerHTML = mk.markets.map((m) => { const i = m.probabilities ? m.probabilities.indexOf(Math.max(...m.probabilities)) : -1;
+    return `<tr><td class="q"><a href="/v1/markets/${m.address}">${esc(m.question)}</a></td><td>${i >= 0 ? esc(m.outcomes?.[i]) + " " + pct(m.probabilities[i]) : "–"}</td><td class="n">${usd(m.volume_usd)}</td><td class="n">${m.traders}</td><td>${day(m.trading_closes_at)}</td></tr>`; }).join("");
+  $("#board tbody").innerHTML = lb.wallets.map((w) => `<tr><td class="mono"><a href="/v1/wallets/${w.address}">${short(w.address)}</a></td><td class="n">${w.resolved_markets}</td><td class="n">${usd(w.realized_pnl_usd)}</td><td class="n">${pct(w.return_on_closed)}</td><td class="n">${pct(w.hit_rate)}</td><td class="n">${w.brier == null ? "–" : w.brier.toFixed(3)}</td></tr>`).join("");
+  const v = st.verification;
+  $("#checks tbody").innerHTML = v ? v.checks.map((c) => `<tr><td>${esc(c.name)}</td><td>${c.ok ? '<span class="tag ok">pass</span>' : '<span class="tag warn">fail</span>'}</td><td>${esc(c.detail)}</td></tr>`).join("") : '<tr><td colspan="3">Not run yet.</td></tr>';
+}
+const eps = [["/v1/status","Index height, counts, last verification"],["/v1/registry","Every Delphi contract found on chain, and whether the official SDK names it"],["/v1/markets?status=open&order=volume","Markets with current probabilities"],["/v1/markets/{address}","One market with its rules, sources and on-chain text hash"],["/v1/markets/{address}/prices?interval=1h","Probability history"],["/v1/markets/{address}/trades","Every event in a market"],["/v1/markets/{address}/positions","Who holds what"],["/v1/wallets/{address}","A wallet's track record"],["/v1/wallets/{address}/markets","Per-market profit and accuracy"],["/v1/leaderboard?by=pnl|return|brier|hit_rate|volume","Ranked wallets"],["/v1/settlements","Resolved, failed and expired markets with timing"],["/v1/settlement-health","Share of markets that closed without a winner, per contract"],["/v1/dataset/resolved.jsonl?path=1","Resolved-markets dataset with price paths"],["/v1/dataset/resolved.csv","The same, flat"],["/v1/stream?kinds=trade,settled&min_move=0.05","Live events (server-sent events)"],["/v1/definitions","How each number is calculated"]];
+$("#eps").innerHTML = eps.map(([p, d]) => `<tr><td class="mono"><a href="${p.replace(/\{address\}.*/, "").replace(/\|.*/, "")}">${esc(p)}</a></td><td>${d}</td></tr>`).join("");
+load(); setInterval(load, 60000);
+let first = true;
+const es = new EventSource("/v1/stream");
+const row = (e) => `<tr><td>${day(e.at)}</td><td>${e.type === "trade" ? e.side + " " + esc(e.outcome_label ?? "") : e.type.replace(/_/g, " ")}</td><td class="q"><a href="/v1/markets/${e.market}">${esc(e.question ?? e.market)}</a></td><td class="n">${e.usd != null ? usd(e.usd) : ""}</td><td class="n">${e.type === "trade" ? pct(e.probability_before) + " → " + pct(e.probability_after) : esc(e.winning_label ?? "")}</td></tr>`;
+const add = (e) => { const tb = $("#live tbody"); if (first) { tb.innerHTML = ""; first = false; } tb.insertAdjacentHTML("afterbegin", row(e)); while (tb.rows.length > 12) tb.deleteRow(-1); };
+j("/v1/events/recent?limit=12").then((r) => r.events.reverse().forEach(add));
+for (const t of ["trade","market_created","settled","failed","resolution_requested","redeem","liquidate","trading_closed","expired"]) es.addEventListener(t, (m) => add(JSON.parse(m.data)));
+</script>
+</body>
+</html>

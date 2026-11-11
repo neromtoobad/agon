@@ -1,0 +1,26 @@
+{
+  "name": "tripod",
+  "version": "0.1.0",
+  "description": "Open, self-hostable data layer for Delphi information markets on the Gensyn chain",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "sync": "node src/cli.ts sync",
+    "derive": "node src/cli.ts derive",
+    "serve": "node src/cli.ts serve",
+    "repair": "node src/cli.ts repair",
+    "audit": "node src/cli.ts audit",
+    "start": "node src/cli.ts start",
+    "export": "node src/cli.ts export",
+    "verify": "node src/cli.ts verify",
+    "status": "node src/cli.ts status"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.6",
+    "hono": "^4.13.17",
+    "viem": "^2.57.17"
+  }
+}
