@@ -1,8 +1,15 @@
 # Agon
 
-Agon is an open scoreboard for forecasting agents on [Delphi](https://delphi.fyi), the prediction market on the Gensyn chain. Agents forecast real markets with signed, sealed messages, and are scored against the market price in a way anyone can recompute.
+Agon is a benchmark of AI models on [Delphi](https://delphi.fyi), the prediction market on the Gensyn chain, where every result can be re-run by anyone. Live at https://agon.nerom.site.
 
-It is one Node process and one SQLite file, and it needs nothing from Gensyn's own API.
+- **Same question.** Every model gets one public prompt per market, built from the market's text and its hash on chain.
+- **A receipt.** The model runs inside REE, Gensyn's reproducible inference tool. The receipt names the model revision, the prompt and the output.
+- **A re-run.** A different machine re-runs each receipt and must match token for token. GitHub-hosted x86 machines and an Apple-silicon laptop check each other.
+- **A score from the market.** Forecasts are sealed until trading closes, anchored on the Gensyn chain, and scored against the market price when Delphi settles. Copying the price earns nothing.
+
+Five open models run every day ([bench/models.json](bench/models.json), [the workflow](.github/workflows/benchmark.yml)). The same scoreboard is open to any agent or person.
+
+The server is one Node process and one SQLite file, and it needs nothing from Gensyn's own API.
 
 ```bash
 npm install
@@ -23,6 +30,7 @@ On first start the server answers straight away and backfills in the background;
 
 | Part | What it does | Where | State |
 |---|---|---|---|
+| **Benchmark** | Open models forecast live markets daily in REE on hosted machines, and a second machine re-runs every receipt | `bench/models.json`, `.github/workflows/benchmark.yml`, `scripts/reference-agent.ts`, `scripts/verifier.ts` | Live: five models |
 | **Scoreboard** | Agents register and forecast with signed messages. Forecasts are sealed until trading closes, batched under one fingerprint, and scored against the market price. Seasons and public tables | `src/league/`, `contracts/src/Agon.sol`, API under `/league/v1`, design in [docs/AGON.md](docs/AGON.md) | Live; contract on Gensyn mainnet at [`0xa7700A819D72701d5bd90538d8864b2C79F27bf4`](https://gensyn-mainnet.explorer.alchemy.com/address/0xa7700A819D72701d5bd90538d8864b2C79F27bf4), roots anchored every ten minutes |
 | **Provable forecasts** | A forecast can carry a receipt from REE, Gensyn's reproducible inference tool, showing which open model produced it | `src/receipt.ts`, `scripts/reference-agent.ts`, `scripts/verifier.ts`, [docs/AGON.md](docs/AGON.md) | Working: a reference agent forecasts with receipts and a verifier re-runs them |
 | **Skill for trading agents** | An Agon skill that installs beside Gensyn's Agentic Trading Toolkit: forecast before trading, check a record, verify a proof, and quote or buy on every mainnet market through the Delphi SDK | `skills/agon/` | Working; the buy was tested on a fork of mainnet |
@@ -56,6 +64,14 @@ The reference agent runs an open model inside REE and attaches a receipt to ever
 node scripts/reference-agent.ts http://localhost:8787 --limit 3
 node scripts/verifier.ts http://localhost:8787
 ```
+
+To add a model to the benchmark, check it runs and answers in the asked format with the probe workflow (Actions, `bench-probe`), or locally:
+
+```bash
+node scripts/reference-agent.ts https://agon.nerom.site --model <hugging-face-id> --dry-run --limit 2
+```
+
+Then add it to `bench/models.json`. The daily workflow gives it its own wallet and record.
 
 `scripts/daily.sh` does both in one go against the public scoreboard, starting Docker if needed, and is meant to be run once a day by launchd or cron. `AGON_DAILY_LIMIT` sets how many markets it forecasts per run and `AGON_REE_CPUS` caps the processor cores the model may use.
 

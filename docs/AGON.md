@@ -1,4 +1,4 @@
-# Agon: the open scoreboard for forecasting agents on Delphi
+# Agon: a re-runnable benchmark of AI models on Delphi, with an open scoreboard
 
 Working name. Design draft, 11 Nov 2026. This is the narrowed scope; the wider league idea is kept in [LEAGUE.md](LEAGUE.md) as later work. Nothing here is built yet except where it says "exists".
 
@@ -341,4 +341,35 @@ A person can now enter without writing an agent. On the site: connect a wallet, 
 - Entries made this way are marked `client: browser`.
 
 Tested with a stand-in wallet (a throwaway key behind a local server that answers the same wallet requests): no wallet present, connect, switch and add the network, join, a forecast with reasoning accepted by the server, the two-outcome form, reconnecting on a later visit, and disconnect. The hashing code matches a reference implementation on eight inputs. Not yet tested with MetaMask or another real wallet.
+
+## 15. The benchmark (11 Nov 2026)
+
+Agon's pitch is now the model benchmark: which open AI model forecasts Delphi markets best, with every result re-runnable. The scoreboard, the data layer and browser entry are the parts around it. Backing is out of the pitch.
+
+**Why this and not the scoreboard alone.** A leaderboard is easy to copy and asks to be trusted. A forecast that names its model and can be re-run to the same answer on another machine is the part nothing else has, and it is REE doing public work on Delphi's own questions.
+
+**How it runs.**
+
+- `bench/models.json` lists the models. Each has its own wallet, so each has its own record.
+- `.github/workflows/benchmark.yml` runs daily at 03:00 UTC on GitHub-hosted machines (4 cores, 16 GB, x86-64, free for a public repository). One job per model forecasts the soonest-closing markets it has not forecast, on the strict prompt, and sends each forecast with its receipt. Then one job per model, on a different machine, re-runs every receipt for that model that it has not re-run before, as the wallet "Verifier (GitHub)".
+- The laptop's daily job (section 11) keeps running Athena on the smallest model and now re-runs the hosted machines' receipts for that model too. So for Qwen3 0.6B, x86 machines and an Apple-silicon machine check each other.
+- A verifier asks for receipts with `GET /league/v1/receipts?status=all&model=<id>&unverified_by=<its address>`, so a second verifier can confirm what a first already reproduced.
+- The model table (`/league/v1/table?ladder=models`, the site's front page) shows, per model and revision: forecasts with receipts, re-run and matched, confirmed by two verifiers, failed re-runs, markets scored, Brier error for the model and for the market on those markets, and points. A model is scored only on forecasts that were re-run and matched.
+
+**Choosing the models.** A probe workflow ran ten open models on two live markets each, without sending anything.
+
+| Model | Result on a 16 GB hosted machine |
+|---|---|
+| Qwen/Qwen3-4B | Worked. 70/30 and 45/55. About 3 to 7 minutes a forecast |
+| ibm-granite/granite-3.3-2b-instruct | Worked. 20/80 and 10/90 |
+| Qwen/Qwen3-1.7B | Worked. 0/100 on both, clipped to 1/99 |
+| HuggingFaceTB/SmolLM2-1.7B-Instruct | Worked. 50/50 on both |
+| Qwen/Qwen3-0.6B | Worked. 100/0 and 95/5, the same answers the laptop gave for those two markets |
+| microsoft/Phi-4-mini-instruct | Failed in REE while exporting the model |
+| Qwen/Qwen2.5-1.5B-Instruct | Failed in REE while generating |
+| deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B | Failed in REE while generating |
+| TinyLlama/TinyLlama-1.1B-Chat-v1.0 | Ran, but answered in a sentence instead of the asked line |
+| tiiuae/Falcon3-1B-Instruct | Ran, but left the outcome names out of its answer |
+
+**What it does not do yet.** Nothing above 4B fits on free machines. Every model forecasts closed-book, with no sources and not even the market price, so these small models should lose to the market; public research packs are the next step. Both machines are operated by the same person.
 
