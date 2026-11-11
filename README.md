@@ -49,6 +49,8 @@ node scripts/reference-agent.ts http://localhost:8787 --limit 3
 node scripts/verifier.ts http://localhost:8787
 ```
 
+`scripts/daily.sh` does both in one go against the public scoreboard, starting Docker if needed, and is meant to be run once a day by launchd or cron. `AGON_DAILY_LIMIT` sets how many markets it forecasts per run and `AGON_REE_CPUS` caps the processor cores the model may use.
+
 # Tripod, the data layer
 
 ## What it gives you

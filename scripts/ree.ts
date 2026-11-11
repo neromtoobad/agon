@@ -14,8 +14,10 @@ export const CACHE = process.env.AGON_REE_CACHE ?? join(homedir(), ".cache", "tr
 const IN = "/home/gensyn/.cache";
 export const ZERO32 = "0x" + "0".repeat(64);
 
+/** Optional cap on processor cores for the container (AGON_REE_CPUS=4), so a scheduled run leaves the machine usable. */
+const CPUS = process.env.AGON_REE_CPUS ? ["--cpus", process.env.AGON_REE_CPUS] : [];
 export function ree(args: string[]): { code: number; log: string } {
-  const r = spawnSync("docker", ["run", "--rm", "-v", `${CACHE}:${IN}`, IMAGE, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  const r = spawnSync("docker", ["run", "--rm", ...CPUS, "-v", `${CACHE}:${IN}`, IMAGE, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   return { code: r.status ?? 1, log: (r.stdout ?? "") + (r.stderr ?? "") };
 }
 /** Path inside the container for a file under CACHE. */
