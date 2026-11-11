@@ -1,17 +1,19 @@
 :root {
   --paper: #f4efe4; --card: #fbf8f1; --ink: #17150f; --mute: #17150f99; --line: #17150f2e;
   --orange: #e9622b; --teal: #0f6f63; --tealbg: #d7efe9; --pink: #f3b6cf; --blue: #24388f; --sun: #f4d24a; --cream: #fff3d6;
-  --serif: "Instrument Serif", "Times New Roman", serif; --mono: "Space Mono", ui-monospace, Menlo, monospace;
+  --serif: "Instrument Serif", "Times New Roman", serif; --mono: "Fragment Mono", ui-monospace, Menlo, monospace; --sans: "Figtree", system-ui, sans-serif;
 }
 * { box-sizing: border-box }
 html { scroll-behavior: smooth }
-body { margin: 0; background: var(--paper); color: var(--ink); font: 14px/1.55 var(--mono); -webkit-font-smoothing: antialiased }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 13.5px/1.6 var(--mono); -webkit-font-smoothing: antialiased }
+/* The mono has one weight, so emphasis in running text switches to the sans at the same size instead of a smeared fake bold. */
+b, strong { font-family: var(--sans); font-weight: 600; font-size: 1.04em }
 a { color: inherit }
 .wrap { max-width: 1160px; margin: 0 auto; padding: 0 24px }
 
 /* Top bar */
 .strip { background: var(--ink); color: var(--paper); font-size: 12px; padding: 7px 0; text-align: center }
-.strip b { color: var(--sun); font-weight: 700 }
+.strip b { color: var(--sun) }
 nav { display: flex; align-items: center; gap: 24px; padding: 18px 0 }
 nav .logo { font: 400 30px/1 var(--serif); text-decoration: none; margin-right: 8px }
 nav a.l { text-decoration: none; font-size: 13px; opacity: .65; padding: 4px 0; border-bottom: 1.5px solid transparent }
@@ -39,9 +41,9 @@ section { margin: 46px 0 }
 .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px }
 .grid3 > *, .grid4 > * { min-width: 0 }
 .cmd { display: block; font: 12px/1.5 var(--mono); background: var(--ink); color: var(--paper); padding: 10px 12px; overflow-x: auto; white-space: nowrap }
-.chip { display: inline-block; font-size: 11px; padding: 2px 8px; border: 1px solid var(--ink); background: var(--card); white-space: nowrap }
+.chip { display: inline-block; font-family: var(--mono); font-weight: 400; font-size: 11px; padding: 2px 8px; border: 1px solid var(--ink); background: var(--card); white-space: nowrap }
 .chip.teal { background: var(--tealbg) } .chip.sun { background: var(--sun) } .chip.pink { background: var(--pink) } .chip.sample { border-style: dashed; color: var(--mute) }
-.btn { display: inline-block; font: inherit; font-size: 13px; cursor: pointer; padding: 10px 16px; border: 1.5px solid var(--ink); background: var(--card); color: var(--ink); box-shadow: 3px 3px 0 var(--ink); text-decoration: none; text-align: center; transition: transform .08s, box-shadow .08s }
+.btn { display: inline-block; font: 400 13px/1.55 var(--mono); cursor: pointer; padding: 10px 16px; border: 1.5px solid var(--ink); background: var(--card); color: var(--ink); box-shadow: 3px 3px 0 var(--ink); text-decoration: none; text-align: center; transition: transform .08s, box-shadow .08s }
 .btn:hover { transform: translate(-1px, -1px); box-shadow: 4px 4px 0 var(--ink) } .btn:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--ink) }
 .btn.go { background: var(--orange); color: #fff } .btn.dark { background: var(--ink); color: var(--paper) } .btn.sm { padding: 6px 11px; font-size: 12px }
 .row { display: flex; gap: 10px; flex-wrap: wrap } .row .btn { flex: 1 }
@@ -69,9 +71,9 @@ section { margin: 46px 0 }
 .step .n { font: 400 54px/1 var(--serif); color: var(--orange) }
 
 /* Tables */
-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums }
-th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; font-size: 13px }
-th { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--mute); font-weight: 400 }
+table { width: 100%; border-collapse: collapse; font-family: var(--sans); font-variant-numeric: tabular-nums }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; font-size: 14.5px }
+th { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--mute); font-weight: 400 }
 tr:last-child td { border-bottom: 0 } td.n, th.n { text-align: right }
 tr.link { cursor: pointer } tr.link:hover td { background: #17150f08 }
 td .q { font: 400 18px/1.2 var(--serif); display: block; max-width: 52ch }
@@ -81,15 +83,15 @@ td .q { font: 400 18px/1.2 var(--serif); display: block; max-width: 52ch }
 .prob { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; margin: 8px 0 }
 .prob .bar { height: 26px; border: 1.5px solid var(--ink); background: var(--card); position: relative }
 .prob .bar i { position: absolute; inset: 0 auto 0 0; background-image: radial-gradient(var(--ink) 34%, transparent 36%); background-size: 5px 5px; background-color: var(--c, var(--sun)) }
-.prob .bar b { position: absolute; left: 8px; top: 2px; font-weight: 400; font-size: 12.5px; background: var(--card); padding: 0 5px; border: 1px solid var(--ink) }
+.prob .bar b { position: absolute; left: 8px; top: 2px; font-family: var(--mono); font-weight: 400; font-size: 12.5px; background: var(--card); padding: 0 5px; border: 1px solid var(--ink) }
 .meter { height: 12px; border: 1.5px solid var(--ink); background: var(--card) } .meter i { display: block; height: 100%; background: var(--orange) }
 .limit { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line) }
 .limit input { width: 96px; font: 400 22px var(--serif); text-align: right; border: 0; border-bottom: 1.5px solid var(--ink); background: transparent; color: var(--ink); padding: 0 2px }
 .note { border: 1.5px dashed var(--ink); background: var(--cream); padding: 12px 14px; font-size: 13px; margin: 16px 0 }
 .case { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0 }
-.case div { border: 1px solid var(--line); padding: 10px 12px; font-size: 13px } .case b { display: block; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 4px }
+.case div { border: 1px solid var(--line); padding: 10px 12px; font-size: 13px } .case b { display: block; font-family: var(--mono); font-weight: 400; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 4px }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 18px; font-size: 13px } .kv span { color: var(--mute) }
-.mono { word-break: break-all; font-size: 12px }
+.mono { font-family: var(--mono); word-break: break-all; font-size: 12px }
 details summary { cursor: pointer; font-size: 13px } details p { white-space: pre-wrap; font-size: 12.5px; color: #17150fcc }
 svg.chart { width: 100%; height: 220px; display: block }
 .pass { color: var(--teal) } .fail { color: #b3361c }
