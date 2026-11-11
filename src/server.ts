@@ -300,7 +300,8 @@ app.get("/", page("site/index.html"));
 app.get("/data", page("data.html"));
 app.get("/agon", (c) => c.redirect("/"));
 app.get("/agon/", (c) => c.redirect("/"));
-app.use("/*", serveStatic({ root: join(ROOT, "public", "site") }));
+// no-cache makes browsers check for a newer copy on each visit, so a redeploy shows up at once.
+app.use("/*", serveStatic({ root: join(ROOT, "public", "site"), onFound: (_path, c) => { c.header("Cache-Control", "no-cache"); } }));
 
 async function backfill() {
   setMeta("state", "backfilling");
