@@ -47,7 +47,9 @@ if ! docker info >/dev/null 2>&1; then say "Docker did not come up, nothing was 
 
 # caffeinate keeps the machine from idle-sleeping in the middle of a model run.
 caffeinate -i node scripts/reference-agent.ts "$BASE" --limit "$LIMIT"
-caffeinate -i node scripts/verifier.ts "$BASE" --limit $((LIMIT * 2))
+# This machine can only hold the smallest model, so it re-runs that one: its own receipts and the ones the hosted
+# benchmark made on other hardware. AGON_VERIFY_MODEL changes which.
+caffeinate -i node scripts/verifier.ts "$BASE" --model "${AGON_VERIFY_MODEL:-Qwen/Qwen3-0.6B}" --all --limit $((LIMIT * 2))
 
 if [ "$started_docker" = 1 ]; then say "stopping Docker again"; docker desktop stop >/dev/null 2>&1; fi
 say "run ends"

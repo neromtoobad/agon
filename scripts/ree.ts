@@ -39,12 +39,32 @@ export function newestReceipt(tasksRoot: string, since: number): { text: string;
   return { text, json: JSON.parse(text) };
 }
 
-const DATA = join(dirname(fileURLToPath(import.meta.url)), "..", "data");
-export function wallet(file: string) {
+const HERE = dirname(fileURLToPath(import.meta.url));
+const DATA = join(HERE, "..", "data");
+/** A wallet kept in data/<file>, made on first use. If `envKey` names a set environment variable, that key is used instead (hosted runs). */
+export function wallet(file: string, envKey?: string) {
+  if (envKey && process.env[envKey]) return privateKeyToAccount(process.env[envKey] as `0x${string}`);
   const p = join(DATA, file);
   mkdirSync(DATA, { recursive: true });
   if (!existsSync(p)) writeFileSync(p, JSON.stringify({ privateKey: generatePrivateKey() }, null, 2), { mode: 0o600 });
   return privateKeyToAccount(JSON.parse(readFileSync(p, "utf8")).privateKey);
+}
+
+/** The benchmark's models: bench/models.json, a list of { id, name }. */
+export const roster = (): { id: string; name: string }[] => JSON.parse(readFileSync(join(HERE, "..", "bench", "models.json"), "utf8"));
+
+/** One wallet per benchmark model, so each model has its own record. Keys come from AGON_BENCH_KEYS (JSON, model id to key) or data/agon-bench.json. */
+export function benchWallet(model: string) {
+  if (process.env.AGON_BENCH_KEYS) {
+    const k = JSON.parse(process.env.AGON_BENCH_KEYS)[model];
+    if (!k) throw new Error(`AGON_BENCH_KEYS has no key for ${model}`);
+    return privateKeyToAccount(k);
+  }
+  const p = join(DATA, "agon-bench.json");
+  mkdirSync(DATA, { recursive: true });
+  const all = existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : {};
+  if (!all[model]) { all[model] = generatePrivateKey(); writeFileSync(p, JSON.stringify(all, null, 2), { mode: 0o600 }); }
+  return privateKeyToAccount(all[model]);
 }
 
 /** A model run can take minutes, by which time an idle connection to the server has been dropped, or the server may be restarting.

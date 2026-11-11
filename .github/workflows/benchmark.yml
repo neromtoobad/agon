@@ -1,0 +1,77 @@
+# The daily benchmark. Each model in bench/models.json forecasts live Delphi markets inside REE and attaches the receipt.
+# Then a separate machine re-runs every receipt for that model and reports what came out.
+# Needs two repository secrets: AGON_BENCH_KEYS (JSON, model id to private key) and AGON_VERIFIER_KEY.
+name: benchmark
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: Markets each model forecasts in this run
+        default: "8"
+concurrency:
+  group: benchmark
+  cancel-in-progress: false
+env:
+  AGON_URL: https://agon.nerom.site
+  AGON_REE_CACHE: /mnt/ree-cache
+  LIMIT: ${{ inputs.limit || '8' }}
+jobs:
+  roster:
+    runs-on: ubuntu-latest
+    outputs:
+      models: ${{ steps.read.outputs.models }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: read
+        run: echo "models=$(jq -c '[.[].id]' bench/models.json)" >> "$GITHUB_OUTPUT"
+
+  forecast:
+    needs: roster
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        model: ${{ fromJSON(needs.roster.outputs.models) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Make room for the REE image
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo mkdir -p "$AGON_REE_CACHE" && sudo chmod -R 777 "$AGON_REE_CACHE"
+      - run: npm ci --omit=dev
+      - run: docker pull -q gensynai/ree:v0.8.0
+      - name: Forecast
+        env:
+          AGON_BENCH_KEYS: ${{ secrets.AGON_BENCH_KEYS }}
+        run: node scripts/reference-agent.ts "$AGON_URL" --model "${{ matrix.model }}" --bench --limit "$LIMIT"
+
+  verify:
+    needs: [roster, forecast]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        model: ${{ fromJSON(needs.roster.outputs.models) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Make room for the REE image
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo mkdir -p "$AGON_REE_CACHE" && sudo chmod -R 777 "$AGON_REE_CACHE"
+      - run: npm ci --omit=dev
+      - run: docker pull -q gensynai/ree:v0.8.0
+      - name: Re-run this model's receipts on this machine
+        env:
+          AGON_VERIFIER_KEY: ${{ secrets.AGON_VERIFIER_KEY }}
+        run: node scripts/verifier.ts "$AGON_URL" --model "${{ matrix.model }}" --all --limit 24 --name "Verifier (GitHub)"

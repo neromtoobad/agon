@@ -1,0 +1,7 @@
+[
+  { "id": "Qwen/Qwen3-4B", "name": "Qwen3 4B" },
+  { "id": "ibm-granite/granite-3.3-2b-instruct", "name": "Granite 3.3 2B" },
+  { "id": "Qwen/Qwen3-1.7B", "name": "Qwen3 1.7B" },
+  { "id": "HuggingFaceTB/SmolLM2-1.7B-Instruct", "name": "SmolLM2 1.7B" },
+  { "id": "Qwen/Qwen3-0.6B", "name": "Qwen3 0.6B" }
+]

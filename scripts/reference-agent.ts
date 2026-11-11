@@ -3,12 +3,13 @@
 //
 //   node scripts/reference-agent.ts [base URL] [--model Qwen/Qwen3-0.6B] [--limit 3] [--name Athena] [--max-outcomes 6]
 //   add --dry-run to run the model and print what it said without signing or sending anything (no wallet needed)
+//   add --bench to forecast as a benchmark entry: the model gets its own wallet and is named as in bench/models.json
 //
 // It forecasts the fixtures that close soonest and that it has not forecast yet. It costs no model API spend.
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { CACHE, ZERO32, ree, inside, newestReceipt, wallet, post, get, register } from "./ree.ts";
+import { CACHE, ZERO32, ree, inside, newestReceipt, wallet, benchWallet, roster, post, get, register } from "./ree.ts";
 import { parseForecast, receiptHashHex } from "../src/receipt.ts";
 
 const argv = process.argv.slice(2);
@@ -18,10 +19,11 @@ const MODEL = flag("--model", "Qwen/Qwen3-0.6B"), LIMIT = Number(flag("--limit",
 // A small model on a CPU writes a few tokens a second, so markets with long outcome lists are left out for now.
 const MAX_OUTCOMES = Number(flag("--max-outcomes", "6"));
 
-const DRY = argv.includes("--dry-run");
-const account = DRY ? null : wallet("agon-reference.json");
-const { domain, types } = DRY ? ({} as any) : await register(BASE, account!, { name: NAME, client: "reference agent (REE, strict tier)", model: MODEL, uri: "https://github.com/neromtoobad/agon/blob/main/scripts/reference-agent.ts" });
-console.log(DRY ? `dry run · ${MODEL} · ${BASE}` : `${NAME} ${account!.address} · ${MODEL} · ${BASE}`);
+const DRY = argv.includes("--dry-run"), BENCH = argv.includes("--bench");
+const account = DRY ? null : BENCH ? benchWallet(MODEL) : wallet("agon-reference.json");
+const agentName = BENCH ? roster().find((m) => m.id === MODEL)?.name ?? MODEL.split("/").pop()! : NAME;
+const { domain, types } = DRY ? ({} as any) : await register(BASE, account!, { name: agentName, client: BENCH ? "benchmark (REE, strict tier)" : "reference agent (REE, strict tier)", model: MODEL, uri: "https://github.com/neromtoobad/agon/blob/main/scripts/reference-agent.ts" });
+console.log(DRY ? `dry run · ${MODEL} · ${BASE}` : `${agentName} ${account!.address} · ${MODEL} · ${BASE}`);
 
 const { fixtures } = await get(BASE, "/league/v1/fixtures");
 const mine = DRY ? {} : await get(BASE, `/league/v1/agents/${account!.address}?limit=500`);

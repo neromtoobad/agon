@@ -56,9 +56,11 @@ export function mountLeague(app: Hono) {
   app.post("/league/v1/verifications", guard(async (c) => submitVerification(await c.req.json().catch(() => ({})))));
   /** Receipts a verifier can work on now: attached to a forecast that is already public, and not yet re-run by anyone. */
   app.get("/league/v1/receipts", (c) => {
-    const status = c.req.query("status") ?? "attached", t = Math.floor(Date.now() / 1000);
+    // status: attached (default), reproduced, failed or all. model: one model id. unverified_by: leave out receipts this verifier already re-ran.
+    const status = c.req.query("status") ?? "attached", model = c.req.query("model") ?? "", by = addr(c.req.query("unverified_by") ?? "") ?? "", t = Math.floor(Date.now() / 1000);
     const rows = db.prepare(`SELECT r.forecast_id, r.receipt_hash, r.model, r.tier, r.status, f.market, f.agent FROM league_receipts r JOIN league_forecasts f ON f.id = r.forecast_id JOIN markets m ON m.address = f.market
-      WHERE r.status = ? AND (f.visibility = 1 OR m.trading_deadline <= ?) ORDER BY r.forecast_id LIMIT ?`).all(status, t, int(c.req.query("limit"), 50, 500)) as any[];
+      WHERE (? = 'all' OR r.status = ?) AND (? = '' OR r.model = ?) AND (? = '' OR NOT EXISTS (SELECT 1 FROM league_verifications v WHERE v.receipt_hash = r.receipt_hash AND v.verifier = ?))
+        AND (f.visibility = 1 OR m.trading_deadline <= ?) ORDER BY r.forecast_id LIMIT ?`).all(status, status, model, model, by, by, t, int(c.req.query("limit"), 50, 500)) as any[];
     return c.json({ receipts: rows.map((r) => ({ forecast: r.forecast_id, receipt_hash: r.receipt_hash, model: r.model, tier: r.tier, status: r.status, market: r.market, agent: r.agent })) });
   });
   app.get("/league/v1/forecasts/:id/receipt", (c) => {

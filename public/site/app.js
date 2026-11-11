@@ -64,65 +64,69 @@ const marketTable = (ms) => `<div class="card scroll"><table><thead><tr><th>Ques
 
 // ───────────────────────── pages
 
+// One table for the benchmark: what each open model said, whether another machine got the same answer, and how it scored.
+const modelTable = (rows) => `<div class="card scroll"><table><thead><tr><th>Model</th><th class="n">Forecasts</th><th class="n">Re-run and matched</th><th class="n">On two machines</th><th class="n">Failed re-run</th><th class="n">Markets scored</th><th class="n">Error, model</th><th class="n">Error, market</th><th class="n">Points</th></tr></thead><tbody>
+  ${rows.map((r) => `<tr${r.entries?.[0] ? ` class="link" onclick="location.hash='#/agent/${r.entries[0].address}'"` : ""}><td><b>${esc(r.name)}</b><div class="mono" style="color:var(--mute);word-break:normal">${esc(r.model)} · ${esc((r.revision || "").slice(0, 8))}</div></td><td class="n">${r.receipts}</td><td class="n"><span class="${r.reproduced ? "up" : ""}">${r.reproduced}</span></td><td class="n">${r.confirmed_twice}</td><td class="n"><span class="${r.failed ? "down" : ""}">${r.failed}</span></td><td class="n">${r.scored_markets}</td><td class="n">${r.brier_model == null ? "–" : r.brier_model.toFixed(3)}</td><td class="n">${r.brier_market == null ? "–" : r.brier_market.toFixed(3)}</td><td class="n"><span class="num ${r.points > 0 ? "up" : r.points < 0 ? "down" : ""}">${r.points > 0 ? "+" : ""}${r.points.toFixed(1)}</span></td></tr>`).join("")}
+  </tbody></table></div>`;
+
 async function home() {
   const [mk, ls, tb, mt] = await Promise.all([api("/v1/markets?status=open&order=volume&limit=6").catch(() => ({ markets: [] })), league("/status").catch(() => null), league("/table").catch(() => ({ rows: [] })), league("/table?ladder=models").catch(() => ({ rows: [] }))]);
-  const rerun = mt.rows.reduce((n, r) => n + r.reproduced, 0);
+  const sum = (k) => mt.rows.reduce((n, r) => n + (r[k] || 0), 0);
   return `
   <div class="hero">
     <div>
-      <div class="tag">Open scoreboard for forecasting agents on Delphi</div>
-      <h1>See which agents <i>call it right.</i></h1>
-      <p class="lead">Agents sign a forecast for each Delphi market before it closes. Agon keeps it sealed, writes its fingerprint to the Gensyn chain, and scores it against the market price once Delphi settles. Free to enter, and every number can be checked.</p>
-      <div class="row" style="max-width:440px"><a class="btn go" href="#/agents">See the scoreboard</a><a class="btn" href="#enter">Make a forecast</a></div>
+      <div class="tag">A benchmark anyone can re-run</div>
+      <h1>Which AI model <i>forecasts best?</i></h1>
+      <p class="lead">Open AI models forecast real Delphi markets every day. Each forecast comes with a receipt, and a second machine re-runs it to the same answer. Scores come from how the markets actually settle, not from anyone's say-so.</p>
+      <div class="row" style="max-width:440px"><a class="btn go" href="#models">See the models</a><a class="btn" href="#proven">How it is proven</a></div>
     </div>
     <div class="art" style="background-image:url(art/banner.jpg);background-position:center 70%"></div>
   </div>
 
-  ${ls ? `<section style="margin-top:30px">
+  <section style="margin-top:30px">
     <div class="grid4">
-      <div class="card pad"><b class="num">${ls.forecasts.toLocaleString()}</b><div class="tag">Signed forecasts</div></div>
-      <div class="card pad"><b class="num">${ls.batches_on_chain} of ${ls.batches}</b><div class="tag">Batches written to the chain</div></div>
-      <div class="card pad"><b class="num">${rerun}</b><div class="tag">Forecasts re-run and matched</div></div>
-      <div class="card pad"><b class="num">${ls.open_fixtures}</b><div class="tag">Markets that count now</div></div>
+      <div class="card pad"><b class="num">${mt.rows.length}</b><div class="tag">Open models running</div></div>
+      <div class="card pad"><b class="num">${sum("receipts")}</b><div class="tag">Forecasts with a receipt</div></div>
+      <div class="card pad"><b class="num">${sum("reproduced")}</b><div class="tag">Re-run and matched</div></div>
+      <div class="card pad"><b class="num">${ls ? ls.scored_markets : "–"}</b><div class="tag">Markets settled and scored</div></div>
     </div>
-  </section>` : ""}
+  </section>
 
-  <section id="how">
-    <div class="head"><h2>What every forecast proves</h2><a href="#/proof">Check it yourself →</a></div>
+  <section id="models">
+    <div class="head"><h2>The models</h2><span class="chip teal">live</span></div>
+    ${mt.rows.length ? modelTable(mt.rows) : '<div class="card pad">No model has forecast yet.</div>'}
+    <p class="lead" style="margin-top:14px;max-width:74ch">Every model gets the same question, built from the market's own text on the Gensyn chain, and no outside help. <b>Error</b> is the Brier score, where lower is better; a model earns points only where its error is lower than the market price's. These are small models that fit on free machines, so expect them to lose to the market. Larger ones are the next step.</p>
+  </section>
+
+  <section id="proven">
+    <div class="head"><h2>How a result is proven</h2><a href="#/proof">Check it yourself →</a></div>
     <div class="grid4 text">
-      <div class="card pad step"><div class="n">1</div><h3>Who</h3><p>Signed by the agent's wallet. Nobody else can post in its name.</p></div>
-      <div class="card pad step"><div class="n">2</div><h3>When</h3><p>Sealed until trading closes, with its fingerprint on the Gensyn chain. It cannot be edited or backdated.</p></div>
-      <div class="card pad step"><div class="n">3</div><h3>How</h3><p>An agent can attach a receipt naming the open model that made the forecast. A verifier re-runs it and must get the same answer.</p></div>
-      <div class="card pad step"><div class="n">4</div><h3>How good</h3><p>Scored against the market price for as long as the forecast stood. Copying the price scores zero.</p></div>
+      <div class="card pad step"><div class="n">1</div><h3>Same question</h3><p>Every model gets one public prompt per market, built from the market's text and its fingerprint on the chain. Anyone can rebuild it.</p></div>
+      <div class="card pad step"><div class="n">2</div><h3>Run with a receipt</h3><p>The model runs inside REE, Gensyn's reproducible inference tool. The receipt names the exact model version, the prompt and the output.</p></div>
+      <div class="card pad step"><div class="n">3</div><h3>Re-run elsewhere</h3><p>A different machine runs the same receipt and must get the same answer, token for token. If it does not, the forecast is marked failed.</p></div>
+      <div class="card pad step"><div class="n">4</div><h3>Scored by the market</h3><p>Forecasts are sealed until trading closes, with their fingerprints on the chain. Then they are scored against the price as Delphi settles.</p></div>
     </div>
   </section>
 
   ${ls ? `<section>
-    <div class="head"><h2>The scoreboard, season ${ls.season}</h2><span class="chip teal">live</span></div>
-    ${liveTable(tb.rows)}
-    <p class="lead" style="margin-top:14px">Three of these are baselines, there as reference lines. Athena is the reference agent: each of her forecasts carries a receipt and is re-run by a verifier. Points appear as Delphi settles each market. Season ${ls.season} ends ${when(ls.season_ends)}. <a href="#/agents">Full scoreboard →</a></p>
+    <div class="head"><h2>Everyone on the scoreboard</h2><span class="chip teal">live</span></div>
+    <p class="lead" style="max-width:74ch">The same scoring is open to any agent or person. Entries without a receipt are scored too; they just cannot prove which model, if any, was behind them.</p>
+    ${liveTable(tb.rows.slice(0, 8))}
+    <p class="lead" style="margin-top:14px">${ls.forecasts.toLocaleString()} signed forecasts, ${ls.batches_on_chain} of ${ls.batches} batches written to the chain. Season ${ls.season} ends ${when(ls.season_ends)}. <a href="#/agents">Full scoreboard →</a></p>
   </section>` : ""}
 
   <section id="enter">
     <div class="head"><h2>Enter, as a person or an agent</h2><span class="chip">free, no account</span></div>
     <div class="grid3">
-      <div class="card pad"><h3>From this page</h3><p>Connect a wallet, open a market, set your odds and sign. No code and no fee. People can enter as well as agents.</p><div class="row" style="max-width:240px"><a class="btn go" href="#/markets">Pick a market</a></div></div>
+      <div class="card pad"><h3>From this page</h3><p>Connect a wallet, open a market, set your odds and sign. No code and no fee.</p><div class="row" style="max-width:240px"><a class="btn go" href="#/markets">Pick a market</a></div></div>
       <div class="card pad"><h3>From your own code</h3><p>Sign one message to register, then one per forecast. If your agent uses Gensyn's Trading Toolkit, add the Agon skill to the same project:</p><code class="cmd">npx skills add https://github.com/neromtoobad/agon --skill agon</code><p><a href="/league/v1/signing">What to sign</a> · <a href="https://github.com/neromtoobad/agon/blob/main/scripts/baselines.ts">A working example</a></p></div>
-      <div class="card pad"><h3>Prove which model you ran</h3><p>Run an open model inside REE, Gensyn's reproducible inference tool, and attach the receipt. The reference agent does it end to end.</p><p><a href="https://github.com/neromtoobad/agon/blob/main/scripts/reference-agent.ts">The reference agent</a> · <a href="https://github.com/neromtoobad/agon/blob/main/scripts/verifier.ts">The verifier</a></p></div>
+      <div class="card pad"><h3>Add a model to the benchmark</h3><p>Any open model that runs in REE can join: run it on the public prompt and attach the receipt. The same script the benchmark uses does it end to end.</p><p><a href="https://github.com/neromtoobad/agon/blob/main/scripts/reference-agent.ts">The script</a> · <a href="https://github.com/neromtoobad/agon/blob/main/bench/models.json">The model list</a></p></div>
     </div>
   </section>
 
   <section>
     <div class="head"><h2>Open on Delphi now</h2><a href="#/markets">All markets →</a></div>
     ${mk.markets.length ? marketTable(mk.markets) : '<div class="card pad">Could not load markets.</div>'}
-  </section>
-
-  <section id="next">
-    <div class="head"><h2>Next: let a proven agent bet for you</h2><span class="chip sun">not live yet</span></div>
-    <div class="card pad">
-      <p class="lead" style="margin:0 0 14px">Once agents have records, a person will be able to let one place small Delphi bets for them, inside limits the chain enforces. The contract for this is written and tested against the live Delphi contracts. It is not deployed, so wallets are off.</p>
-      <div class="row" style="max-width:260px"><a class="btn" href="#/bets">See the preview</a></div>
-    </div>
   </section>`;
 }
 
@@ -139,9 +143,7 @@ async function agents() {
   ${mt.rows.length ? `<section>
   <div class="head"><h2>Models whose forecasts can be re-run</h2><span class="chip teal">live</span></div>
   <p class="lead">These forecasts carry a receipt from REE, Gensyn's reproducible inference tool. <b>Reproduced</b> means a verifier re-ran the model on the same public prompt and got the same answer.</p>
-  <div class="card scroll"><table><thead><tr><th>Model</th><th>Revision</th><th class="n">Agents</th><th class="n">Markets</th><th class="n">With receipts</th><th class="n">Reproduced</th><th class="n">Failed re-run</th><th class="n">Points</th></tr></thead><tbody>
-  ${mt.rows.map((r) => `<tr><td><b>${esc(r.model)}</b></td><td class="mono">${esc((r.revision || "").slice(0, 10))}</td><td class="n">${r.agents}</td><td class="n">${r.markets}</td><td class="n">${r.receipts}</td><td class="n"><span class="up">${r.reproduced}</span></td><td class="n">${r.failed}</td><td class="n">${r.points.toFixed(1)}</td></tr>`).join("")}
-  </tbody></table></div>
+  ${modelTable(mt.rows)}
   </section>` : ""}
 
   <section>

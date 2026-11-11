@@ -1,6 +1,8 @@
 import { keccak256, concat, hashTypedData, verifyTypedData, isAddress, toHex, type Hex } from "viem";
 import { db, tx } from "../db.ts";
-import { network, lc } from "../config.ts";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { network, lc, ROOT } from "../config.ts";
 import { checkReceipt, validateReceipt, parseForecast, buildPrompt, receiptHashHex, STRICT_PACK, directiveFor, type Receipt, type MarketText } from "../receipt.ts";
 
 /**
@@ -360,8 +362,20 @@ export function traderTable(season: number) {
 
 /** Models seen in receipts: how many forecasts carry one, how many were reproduced, and the points their agents earned on those markets. */
 export function modelTable(season: number) {
-  return (db.prepare(`SELECT r.model, r.revision, COUNT(*) receipts, SUM(r.status = 'reproduced') reproduced, SUM(r.status = 'failed') failed, SUM(r.tier = 'strict') strict,
-      COUNT(DISTINCT f.agent) agents, COUNT(DISTINCT f.market) markets,
-      ROUND(COALESCE((SELECT SUM(s.points) FROM league_scores s WHERE s.season = ? AND EXISTS (SELECT 1 FROM league_receipts r2 JOIN league_forecasts f2 ON f2.id = r2.forecast_id WHERE r2.model = r.model AND r2.status = 'reproduced' AND f2.agent = s.agent AND f2.market = s.market)), 0), 2) points
-    FROM league_receipts r JOIN league_forecasts f ON f.id = r.forecast_id GROUP BY r.model, r.revision ORDER BY reproduced DESC, receipts DESC`).all(season) as any[]);
+  let names: Record<string, string> = {};
+  try { names = Object.fromEntries((JSON.parse(readFileSync(join(ROOT, "bench", "models.json"), "utf8")) as any[]).map((m) => [m.id, m.name])); } catch { /* no roster file: show model ids */ }
+  const rows = db.prepare(`WITH rr AS (SELECT r.model, r.revision, r.receipt_hash, r.status, r.tier, f.agent, f.market FROM league_receipts r JOIN league_forecasts f ON f.id = r.forecast_id),
+      ver AS (SELECT receipt_hash, COUNT(DISTINCT verifier) n FROM league_verifications WHERE matched = 1 GROUP BY receipt_hash)
+    SELECT rr.model, rr.revision, COUNT(*) receipts, SUM(rr.status = 'reproduced') reproduced, SUM(rr.status = 'failed') failed, SUM(rr.tier = 'strict') strict,
+      COUNT(DISTINCT rr.agent) agents, COUNT(DISTINCT rr.market) markets, SUM(COALESCE(ver.n, 0) >= 2) confirmed_twice
+    FROM rr LEFT JOIN ver ON ver.receipt_hash = rr.receipt_hash GROUP BY rr.model, rr.revision`).all() as any[];
+  // A model is scored only on forecasts that were re-run and matched: those are the ones known to be its own work.
+  const scored = db.prepare(`SELECT COUNT(*) n, COALESCE(SUM(s.points), 0) p, AVG(s.b_agent) ba, AVG(s.b_market) bm FROM league_scores s WHERE s.season = ? AND EXISTS
+    (SELECT 1 FROM league_receipts r2 JOIN league_forecasts f2 ON f2.id = r2.forecast_id WHERE r2.model = ? AND r2.revision = ? AND r2.status = 'reproduced' AND f2.agent = s.agent AND f2.market = s.market)`);
+  const verifiers = db.prepare(`SELECT COUNT(DISTINCT v.verifier) n FROM league_verifications v WHERE v.matched = 1 AND v.receipt_hash IN (SELECT receipt_hash FROM league_receipts WHERE model = ? AND revision = ?)`);
+  const entries = db.prepare(`SELECT DISTINCT f.agent address, a.name FROM league_receipts r JOIN league_forecasts f ON f.id = r.forecast_id JOIN league_agents a ON a.address = f.agent WHERE r.model = ? AND r.revision = ?`);
+  return rows.map((r) => {
+    const sc = scored.get(season, r.model, r.revision) as any, round = (x: number | null, d: number) => (x == null ? null : Math.round(x * 10 ** d) / 10 ** d);
+    return { ...r, name: names[r.model] ?? r.model, entries: entries.all(r.model, r.revision), verifiers: (verifiers.get(r.model, r.revision) as any).n, scored_markets: sc.n, points: round(sc.p, 2) ?? 0, brier_model: round(sc.ba, 4), brier_market: round(sc.bm, 4) };
+  }).sort((a, b) => b.points - a.points || b.reproduced - a.reproduced || b.receipts - a.receipts);
 }

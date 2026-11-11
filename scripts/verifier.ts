@@ -2,7 +2,10 @@
 // Anyone with Docker can run one. The scoreboard never trusts the text inside a submitted receipt;
 // it reads the forecast from a verifier's own re-run.
 //
-//   node scripts/verifier.ts [base URL] [--limit 5] [--name "House Verifier"]
+//   node scripts/verifier.ts [base URL] [--limit 5] [--name "House Verifier"] [--model Qwen/Qwen3-0.6B] [--all]
+//
+// By default it takes receipts nobody has re-run. With --all it takes every receipt this verifier has not re-run itself,
+// so a second machine can confirm what a first one already reproduced. AGON_VERIFIER_KEY overrides the saved key.
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -12,13 +15,13 @@ import { CACHE, ree, inside, newestReceipt, wallet, post, get, register } from "
 const argv = process.argv.slice(2);
 const flag = (k: string, d: string) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : d; };
 const BASE = argv[0] && !argv[0].startsWith("--") ? argv[0] : "http://localhost:8787";
-const LIMIT = Number(flag("--limit", "5")), NAME = flag("--name", "House Verifier");
+const LIMIT = Number(flag("--limit", "5")), NAME = flag("--name", "House Verifier"), ONLY = flag("--model", ""), ALL = argv.includes("--all");
 
-const account = wallet("agon-verifier.json");
+const account = wallet("agon-verifier.json", "AGON_VERIFIER_KEY");
 const { domain, types } = await register(BASE, account, { name: NAME, client: "verifier", model: "re-runs receipts in REE; does not forecast", uri: "https://github.com/neromtoobad/agon/blob/main/scripts/verifier.ts" });
 console.log(`${NAME} ${account.address} · ${BASE}`);
 
-const { receipts } = await get(BASE, "/league/v1/receipts?status=attached&limit=200");
+const { receipts } = await get(BASE, `/league/v1/receipts?limit=500&status=${ALL ? "all" : "attached"}&unverified_by=${account.address}${ONLY ? `&model=${encodeURIComponent(ONLY)}` : ""}`);
 const seen = new Set<string>();
 const todo = receipts.filter((r: any) => !seen.has(r.receipt_hash) && seen.add(r.receipt_hash)).slice(0, LIMIT);
 console.log(`${receipts.length} forecasts wait for a re-run (${seen.size} distinct receipts), doing ${todo.length}`);
