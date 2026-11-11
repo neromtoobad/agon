@@ -292,7 +292,7 @@ app.get("/", (c) => c.html(readFileSync(join(ROOT, "public", "index.html"), "utf
 
 async function backfill() {
   setMeta("state", "backfilling");
-  console.log("empty database: backfilling (a few minutes)…");
+  console.log("backfilling (a few minutes on an empty database)…");
   await syncLogs({ log: console.log }); await syncRegistry(console.log); await syncDpmConfig(console.log); await syncMetadata(console.log);
   await repairFromSubgraphs(console.log).catch((e) => console.error("repair skipped:", (e as Error).message));
   derive();
@@ -309,7 +309,8 @@ export async function serve(opts: { live: boolean }) {
   console.log(`tripod listening on http://localhost:${PORT} (${network.name}${opts.live ? ", live" : ", read-only"})`);
   if (!opts.live) return;
   try {
-    if (!(db.prepare("SELECT COUNT(*) n FROM events").get() as any).n) await backfill();
+    // "live" is only written once a backfill has completed, so a restart part-way through resumes it (cursors make that cheap).
+    if (getMeta("state") !== "live") await backfill();
     setMeta("state", "live");
   } catch (e) { console.error("backfill failed, will retry on restart:", (e as Error).message); process.exit(1); }
   const loop = async () => {

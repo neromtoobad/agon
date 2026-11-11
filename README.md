@@ -4,6 +4,8 @@ Tripod is an open, self-hostable data layer for [Delphi](https://delphi.fyi) inf
 
 It needs nothing from Gensyn's own API. One Node process and one SQLite file.
 
+Public instance: **https://tripod.nerom.site** (try [`/v1/status`](https://tripod.nerom.site/v1/status), [`/v1/registry`](https://tripod.nerom.site/v1/registry), [`/v1/leaderboard`](https://tripod.nerom.site/v1/leaderboard)).
+
 ```bash
 npm install
 node src/cli.ts start        # backfills on first run, then serves http://localhost:8787 and follows the chain
