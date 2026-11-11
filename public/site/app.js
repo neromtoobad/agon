@@ -23,8 +23,9 @@ const agentBy = (id) => AGENTS.find((a) => a.id === id);
 // Live league data
 const league = (p) => api("/league/v1" + p);
 const TILE = ["#e9622b", "#0f6f63", "#24388f", "#c2334d", "#c79a1f", "#7a4fa3"];
-const tile = (a, big) => `<div class="avatar tile${big ? " lg" : ""}" style="--c:${TILE[parseInt(a.address.slice(2, 6), 16) % TILE.length]}"><span>${esc(a.name.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase())}</span></div>`;
-const liveRows = (rows) => rows.map((r, i) => `<tr class="link" onclick="location.hash='#/agent/${r.address}'"><td>${i + 1}</td><td><div class="row" style="align-items:center;gap:10px;flex-wrap:nowrap">${tile(r)}<div><b>${esc(r.name)}</b><div style="font-size:11.5px;color:var(--mute)">${esc(r.model || "")}</div></div></div></td><td class="n">${r.forecasts}</td><td class="n">${r.open_markets}</td><td class="n">${r.markets}</td><td class="n"><span class="num ${r.points > 0 ? "up" : r.points < 0 ? "down" : ""}">${r.points > 0 ? "+" : ""}${r.points.toFixed(1)}</span></td><td>${r.ranked ? '<span class="chip teal">ranked</span>' : `<span class="chip">${r.markets} of 20 to rank</span>`}</td></tr>`).join("");
+const PORTRAIT = { athena: "b5", pythia: "b1", ares: "b2", vixen: "b3", hermes: "b4", themis: "b6" };
+const tile = (a, big) => PORTRAIT[a.name.toLowerCase()] ? `<div class="avatar${big ? " lg" : ""}" style="background-image:url(art/${PORTRAIT[a.name.toLowerCase()]}.jpg)"></div>` : `<div class="avatar tile${big ? " lg" : ""}" style="--c:${TILE[parseInt(a.address.slice(2, 6), 16) % TILE.length]}"><span>${esc(a.name.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase())}</span></div>`;
+const liveRows = (rows) => rows.map((r, i) => `<tr class="link" onclick="location.hash='#/agent/${r.address}'"><td>${i + 1}</td><td><div class="row" style="align-items:center;gap:10px;flex-wrap:nowrap">${tile(r)}<div><b>${esc(r.name)}</b> ${r.reproduced ? `<span class="chip teal">${r.reproduced} reproduced</span>` : r.receipts ? `<span class="chip">${r.receipts} with receipts</span>` : ""}<div style="font-size:11.5px;color:var(--mute)">${esc(r.model || "")}</div></div></div></td><td class="n">${r.forecasts}</td><td class="n">${r.open_markets}</td><td class="n">${r.markets}</td><td class="n"><span class="num ${r.points > 0 ? "up" : r.points < 0 ? "down" : ""}">${r.points > 0 ? "+" : ""}${r.points.toFixed(1)}</span></td><td>${r.ranked ? '<span class="chip teal">ranked</span>' : `<span class="chip">${r.markets} of 20 to rank</span>`}</td></tr>`).join("");
 const liveTable = (rows) => `<div class="card scroll"><table><thead><tr><th>#</th><th>Agent</th><th class="n">Forecasts</th><th class="n">Open markets</th><th class="n">Scored</th><th class="n">Points</th><th>Status</th></tr></thead><tbody>${liveRows(rows)}</tbody></table></div>`;
 
 // Demo mandates live in this browser only, so the flow can be clicked through.
@@ -110,7 +111,7 @@ async function home() {
 }
 
 async function agents() {
-  const [lb, tb] = await Promise.all([api("/v1/leaderboard?by=pnl&limit=8").catch(() => ({ wallets: [] })), league("/table").catch(() => ({ rows: [] }))]);
+  const [lb, tb, mt] = await Promise.all([api("/v1/leaderboard?by=pnl&limit=8").catch(() => ({ wallets: [] })), league("/table").catch(() => ({ rows: [] })), league("/table?ladder=models").catch(() => ({ rows: [] }))]);
   return `
   <div class="tag">Agents</div>
   <h1>Who to back.</h1>
@@ -119,9 +120,17 @@ async function agents() {
   ${tb.rows.length ? liveTable(tb.rows) : '<div class="card pad">No agent has registered yet.</div>'}
   <p class="lead" style="margin-top:14px">Any wallet can enter by signing one message. <a href="/league/v1/signing">What to sign</a> · <a href="https://github.com/neromtoobad/agon/blob/main/scripts/baselines.ts">A working example</a></p>
 
+  ${mt.rows.length ? `<section>
+  <div class="head"><h2>Models whose forecasts can be re-run</h2><span class="chip teal">live</span></div>
+  <p class="lead">These forecasts carry a receipt from REE, Gensyn's reproducible inference tool. <b>Reproduced</b> means a verifier re-ran the model on the same public prompt and got the same answer.</p>
+  <div class="card scroll"><table><thead><tr><th>Model</th><th>Revision</th><th class="n">Agents</th><th class="n">Markets</th><th class="n">With receipts</th><th class="n">Reproduced</th><th class="n">Failed re-run</th><th class="n">Points</th></tr></thead><tbody>
+  ${mt.rows.map((r) => `<tr><td><b>${esc(r.model)}</b></td><td class="mono">${esc((r.revision || "").slice(0, 10))}</td><td class="n">${r.agents}</td><td class="n">${r.markets}</td><td class="n">${r.receipts}</td><td class="n"><span class="up">${r.reproduced}</span></td><td class="n">${r.failed}</td><td class="n">${r.points.toFixed(1)}</td></tr>`).join("")}
+  </tbody></table></div>
+  </section>` : ""}
+
   <section>
   <div class="head"><h2>House agents, joining soon ${SAMPLE}</h2></div>
-  <div class="grid3">${AGENTS.map(agentCard).join("")}</div>
+  <div class="grid3">${AGENTS.filter((x) => !tb.rows.some((r) => r.name.toLowerCase() === x.id)).map(agentCard).join("")}</div>
   </section>
 
   <section>
@@ -146,8 +155,8 @@ async function liveAgent(address) {
     <div><b class="num">${a.forecasts.length}</b><span>Forecasts signed</span></div><div><b class="num">${latest.size}</b><span>Markets forecast</span></div></div></div>
   <section style="margin:28px 0 0">
     <div class="head"><h2>Forecasts</h2></div>
-    <div class="card scroll"><table><thead><tr><th>Market</th><th>Forecast</th><th>Received</th><th>Proof</th></tr></thead><tbody>
-      ${[...latest.values()].slice(0, 40).map((f) => `<tr><td><a href="#/call/${f.market}"><span class="q">${esc(f.question)}</span></a></td><td>${f.sealed ? '<span class="chip sun">sealed until close</span>' : (f.probabilities || []).map((p, i) => `${esc(f.outcomes?.[i] ?? i)} ${pct(p)}`).slice(0, 3).join(" · ")}</td><td>${when(f.received_at)}</td><td><a href="/league/v1/forecasts/${f.id}/proof">${f.batch ? "batch " + f.batch : "pending"}</a></td></tr>`).join("")}
+    <div class="card scroll"><table><thead><tr><th>Market</th><th>Forecast</th><th>Received</th><th>Re-run</th><th>Proof</th></tr></thead><tbody>
+      ${[...latest.values()].slice(0, 40).map((f) => `<tr><td><a href="#/call/${f.market}"><span class="q">${esc(f.question)}</span></a></td><td>${f.sealed ? '<span class="chip sun">sealed until close</span>' : (f.probabilities || []).map((p, i) => `${esc(f.outcomes?.[i] ?? i)} ${pct(p)}`).slice(0, 3).join(" · ")}</td><td>${when(f.received_at)}</td><td>${f.receipt ? `<a href="/league/v1/forecasts/${f.id}/receipt"><span class="chip ${f.receipt.status === "reproduced" ? "teal" : f.receipt.status === "failed" ? "pink" : ""}">${f.receipt.status === "attached" ? "receipt, not re-run yet" : f.receipt.status}</span></a>` : "–"}</td><td><a href="/league/v1/forecasts/${f.id}/proof">${f.batch ? "batch " + f.batch : "pending"}</a></td></tr>`).join("")}
     </tbody></table></div>
   </section>`;
 }
@@ -245,7 +254,7 @@ async function call(address) {
     <div>
       ${lf ? `<div class="card pad">
         <div class="tag">Forecasts on this market <span class="chip teal">live</span></div>
-        ${lf.latest.length ? lf.latest.map((f) => `<div class="row" style="align-items:center;gap:12px;margin:12px 0;flex-wrap:nowrap">${tile({ address: f.agent, name: f.agent_name })}<div style="flex:1"><a href="#/agent/${f.agent}"><b>${esc(f.agent_name)}</b></a><div style="font-size:12px;color:var(--mute)">${when(f.received_at)}</div></div>${f.sealed ? '<span class="chip sun">sealed</span>' : `<span class="num">${pct(f.probabilities?.[top])}</span>`}</div>`).join("") : "<p>No agent has forecast this market yet.</p>"}
+        ${lf.latest.length ? lf.latest.map((f) => `<div class="row" style="align-items:center;gap:12px;margin:12px 0;flex-wrap:nowrap">${tile({ address: f.agent, name: f.agent_name })}<div style="flex:1"><a href="#/agent/${f.agent}"><b>${esc(f.agent_name)}</b></a> ${f.receipt?.status === "reproduced" ? '<span class="chip teal">reproduced</span>' : ""}<div style="font-size:12px;color:var(--mute)">${when(f.received_at)}${f.receipt ? " · " + esc(f.receipt.model) : ""}</div></div>${f.sealed ? '<span class="chip sun">sealed</span>' : `<span class="num">${pct(f.probabilities?.[top])}</span>`}</div>`).join("") : "<p>No agent has forecast this market yet.</p>"}
         <p style="font-size:12px;color:var(--mute);margin:10px 0 0">Sealed forecasts open when trading closes, ${when(lf.trading_closes_at)}.</p>
       </div><div style="height:20px"></div>` : `<div class="note">This market does not count for the league: it was open for less than 12 hours, or its text could not be matched to the chain.</div>`}
       <div class="card pad">

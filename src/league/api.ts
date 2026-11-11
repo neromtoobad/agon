@@ -4,7 +4,7 @@ import { lc } from "../config.ts";
 import { J } from "../views.ts";
 import {
   DOMAIN, TYPES, Refused, registerAgent, submitForecast, agentView, forecastView, proofFor, openFixtures, fixture,
-  forecasterTable, traderTable, seasonOf, seasonWindow, RANK_MIN_FORECAST, RANK_MIN_TRADES, RANK_MIN_COST, MIN_FIXTURE_SECONDS,
+  forecasterTable, traderTable, modelTable, submitVerification, strictPrompt, receiptView, seasonOf, seasonWindow, RANK_MIN_FORECAST, RANK_MIN_TRADES, RANK_MIN_COST, MIN_FIXTURE_SECONDS,
 } from "./core.ts";
 import { anchoring } from "./anchor.ts";
 
@@ -34,7 +34,7 @@ export function mountLeague(app: Hono) {
   });
 
   /** Everything a client needs to sign: the EIP-712 domain and types. */
-  app.get("/league/v1/signing", (c) => c.json({ domain: DOMAIN, types: TYPES, note: "probabilities are basis points per outcome, 100 to 9900, adding up to 10000. visibility 0 is sealed until trading closes, 1 is public now. reasoningHash is keccak256 of the UTF-8 reasoning text, or 32 zero bytes." }));
+  app.get("/league/v1/signing", (c) => c.json({ domain: DOMAIN, types: TYPES, note: "probabilities are basis points per outcome, 100 to 9900, adding up to 10000. visibility 0 is sealed until trading closes, 1 is public now. reasoningHash is keccak256 of the UTF-8 reasoning text, or 32 zero bytes. receiptHash is the hex of an REE receipt's receipt_hash, or 32 zero bytes; send the receipt file's text unmodified as `receipt`." }));
 
   app.post("/league/v1/agents", guard(async (c) => registerAgent(await c.req.json().catch(() => ({})))));
   app.get("/league/v1/agents", (c) => c.json({ agents: (db.prepare("SELECT * FROM league_agents ORDER BY registered_ts").all() as any[]).map(agentView) }));
@@ -53,6 +53,27 @@ export function mountLeague(app: Hono) {
   });
 
   app.post("/league/v1/forecasts", guard(async (c) => submitForecast(await c.req.json().catch(() => ({})))));
+  app.post("/league/v1/verifications", guard(async (c) => submitVerification(await c.req.json().catch(() => ({})))));
+  /** Receipts a verifier can work on now: attached to a forecast that is already public, and not yet re-run by anyone. */
+  app.get("/league/v1/receipts", (c) => {
+    const status = c.req.query("status") ?? "attached", t = Math.floor(Date.now() / 1000);
+    const rows = db.prepare(`SELECT r.forecast_id, r.receipt_hash, r.model, r.tier, r.status, f.market, f.agent FROM league_receipts r JOIN league_forecasts f ON f.id = r.forecast_id JOIN markets m ON m.address = f.market
+      WHERE r.status = ? AND (f.visibility = 1 OR m.trading_deadline <= ?) ORDER BY r.forecast_id LIMIT ?`).all(status, t, int(c.req.query("limit"), 50, 500)) as any[];
+    return c.json({ receipts: rows.map((r) => ({ forecast: r.forecast_id, receipt_hash: r.receipt_hash, model: r.model, tier: r.tier, status: r.status, market: r.market, agent: r.agent })) });
+  });
+  app.get("/league/v1/forecasts/:id/receipt", (c) => {
+    const id = Number(c.req.param("id"));
+    const f = db.prepare("SELECT f.visibility, m.trading_deadline d FROM league_forecasts f JOIN markets m ON m.address = f.market WHERE f.id = ?").get(id) as any;
+    if (!f) return c.json({ error: "no such forecast" }, 404);
+    const open = f.visibility === 1 || Math.floor(Date.now() / 1000) >= f.d, r = receiptView(id, open);
+    return r ? c.json(open ? r : { ...r, note: "the receipt itself is sealed until trading closes" }) : c.json({ error: "this forecast has no receipt" }, 404);
+  });
+  /** The exact prompt the strict tier requires for a market and model. */
+  app.get("/league/v1/markets/:address/strict-prompt", (c) => {
+    const a = addr(c.req.param("address")), model = c.req.query("model") ?? "";
+    const p = a ? strictPrompt(a, model) : null;
+    return p ? c.json({ market: a, model, prompt: p }) : c.json({ error: "not a league fixture" }, 404);
+  });
   app.get("/league/v1/forecasts/:id/proof", (c) => { const p = proofFor(Number(c.req.param("id"))); return p ? c.json(p) : c.json({ error: "no such forecast" }, 404); });
 
   app.get("/league/v1/markets/:address/forecasts", (c) => {
@@ -73,7 +94,7 @@ export function mountLeague(app: Hono) {
   app.get("/league/v1/table", (c) => {
     const season = c.req.query("season") != null ? int(c.req.query("season"), 0, 1e6) : seasonOf(Math.floor(Date.now() / 1000));
     const ladder = c.req.query("ladder") ?? "forecasters", w = seasonWindow(season);
-    return c.json({ ladder, season, season_starts: iso(w.starts), season_ends: iso(w.ends), rows: ladder === "traders" ? traderTable(season) : forecasterTable(season) });
+    return c.json({ ladder, season, season_starts: iso(w.starts), season_ends: iso(w.ends), rows: ladder === "traders" ? traderTable(season) : ladder === "models" ? modelTable(season) : forecasterTable(season) });
   });
 
   app.get("/league/v1/batches", (c) => c.json({ anchoring: anchoring(), batches: (db.prepare("SELECT * FROM league_batches ORDER BY id DESC LIMIT 100").all() as any[]).map((b) => ({

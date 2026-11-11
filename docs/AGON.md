@@ -219,3 +219,40 @@ Setup: REE image `gensynai/ree:v0.8.0`, model `Qwen/Qwen3-0.6B` at revision `c18
 Timings: about ten minutes for the first run, most of it one-off model download, export and compile; about two minutes of generation for 48 tokens; about four minutes per full re-run; under two and a half minutes for the second run once the model was cached.
 
 The forecast itself is poor: a 0.6-billion-parameter model with no research said 100% for England, against a market price of 69%. The test was about the mechanics, not the model. Not yet tested: a second physical machine, a GPU, larger models, and decoding submitted token ids with a tokenizer.
+
+## 11. Built: receipts in the scoreboard (11 Nov 2026)
+
+The receipt path is now part of the scoreboard, not a hand test.
+
+**What an agent does.** It asks the scoreboard for a market's strict prompt (`GET /league/v1/markets/<market>/strict-prompt?model=<model>`), runs it in REE, signs a forecast whose `receiptHash` is the receipt's hash, and posts the forecast with the receipt file exactly as REE wrote it. `scripts/reference-agent.ts` does all of this with an open model on a laptop and no model API spend.
+
+**What the scoreboard checks on arrival.** The receipt's own hashes, that the prompt uses the published template and names this market and its text hash, that sampling was off and REE's reproducible mode was on, that the model finished, and that the signed probabilities are what the output line says. A prompt equal to the strict prompt puts the forecast in the strict tier; anything else is the open tier. The forecast is stored with the badge **attached**.
+
+**What a verifier does.** It lists receipts nobody has re-run (`GET /league/v1/receipts?status=attached`), re-runs each in REE from the model weights, and posts a signed report with the text its own run produced (`POST /league/v1/verifications`). `scripts/verifier.ts` is a complete one. Any registered wallet can be a verifier.
+
+**How the badge is decided.** Only from verifier reports, never from the text inside the submitted receipt:
+
+| Badge | Meaning |
+|---|---|
+| attached | A receipt came with the forecast and passed the arrival checks. Nobody has re-run it |
+| reproduced | Every re-run matched the receipt's tokens, and the verifier's own output says exactly what the forecast says |
+| failed | A re-run produced different tokens, or its output says something else. One failed report outweighs earlier passes |
+
+**Where it shows.** Each forecast lists its badge and links to the receipt and its re-runs (`/league/v1/forecasts/<id>/receipt`). A third table, `/league/v1/table?ladder=models`, counts receipts, reproduced and failed re-runs per model and revision. The self-check gained two checks: every stored receipt still validates and is the one named in the signed forecast, and every badge follows from signed verifier reports.
+
+### Test record
+
+Same setup as section 10. Market: "Will Bitcoin be worth more than $74,000 on CoinGecko at 00:00 UTC on Thu 12 Nov 2026?"
+
+| Test | Result |
+|---|---|
+| Reference agent forecasts the market through the API | Accepted, strict tier, badge attached. The model said Yes 99% |
+| Verifier re-runs the receipt and reports | Matched. Badge became reproduced |
+| A second forecast reuses that receipt with the output text edited to 60% / 40% | Accepted on arrival (REE's hashes do not cover the text), then marked failed because the verifier's own output says 99% / 1% |
+| Receipt passed through a JSON parser and written back before sending | REE refused to re-run it: `1.0` had become `1`, which changes the parameters hash. Receipts now travel and are stored as untouched text |
+| Verifier whose REE run errors out | Reports nothing. Only a finished re-run counts as evidence |
+| Self-check on a copy with a verifier report flipped, and on a copy with a receipt setting edited | Failed on the matching check both times |
+| `Qwen/Qwen3-1.7B` on the same laptop | Killed for memory (Docker limit 8 GB) while exporting the model. The reference agent stays on the 0.6B model until it runs on a bigger machine |
+
+Still open: one house verifier is a single point of trust until others run the script; nothing yet pays verifiers; the 0.6B model is a weak forecaster and is there to prove the path, not to win.
+

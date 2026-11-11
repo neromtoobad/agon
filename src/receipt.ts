@@ -48,8 +48,30 @@ export function buildPrompt(m: MarketText, research: ResearchItem[], directive?:
   ].join("\n");
 }
 
+/** The research pack every strict-tier forecast uses until public research packs exist: none at all. */
+export const STRICT_PACK: ResearchItem[] = [{ text: "None supplied. Use general knowledge only." }];
+/** Per-model last line of the strict prompt. Qwen3 thinks out loud by default and runs out of tokens; this switches that off. */
+export const directiveFor = (model: string): string | undefined => (/qwen3/i.test(model) ? "/no_think" : undefined);
+/** The 32-byte value an agent signs to tie a forecast to a receipt. */
+export const receiptHashHex = (r: Receipt) => "0x" + String(r.hashes?.receipt_hash ?? "").replace(/^sha256:/, "").toLowerCase();
+
+/** The one way model percentages become a forecast: whole basis points per outcome, each 100 to 9900, adding up to 10000. */
+export function toBps(p: number[]): number[] {
+  // Percentages that are already a valid forecast are kept exactly: 60 and 40 stay 60% and 40%.
+  const exact = p.map((x) => Math.round(x * 100));
+  if (p.every((x) => x >= 1 && x <= 99) && exact.reduce((a, b) => a + b, 0) === 10000) return exact;
+  // Otherwise squeeze into the allowed range: 100 and 0 become 99% and 1%.
+  const n = p.length, floor = 100, room = 10000 - floor * n, sum = p.reduce((a, b) => a + Math.max(b, 0), 0) || 1;
+  const out = p.map((x) => floor + Math.floor((room * Math.max(x, 0)) / sum));
+  let rest = 10000 - out.reduce((a, b) => a + b, 0);
+  const order = p.map((x, i) => [x, i] as const).sort((a, b) => b[0] - a[0] || a[1] - b[1]).map(([, i]) => i);
+  for (let k = 0; rest > 0; k = (k + 1) % n, rest--) out[order[k]]++;
+  if (out[order[0]] > 9900) { const extra = out[order[0]] - 9900; out[order[0]] = 9900; out[order[1]] += extra; }
+  return out;
+}
+
 /** Read `FORECAST: A=62; B=38` from model output. Returns probabilities in outcome order, or a reason it failed. */
-export function parseForecast(output: string, outcomes: string[]): { probs: number[] } | { error: string } {
+export function parseForecast(output: string, outcomes: string[]): { probs: number[]; bps: number[] } | { error: string } {
   // Thinking models print their reasoning first; the forecast is the last line that matches.
   // Drop end-of-turn markers such as <|im_end|> that some models append to the final line.
   const lines = output.replace(/<\|[^|>]*\|>/g, "").split(/\r?\n/).map((l) => l.trim()).filter((l) => /^FORECAST\s*:/i.test(l));
@@ -70,10 +92,8 @@ export function parseForecast(output: string, outcomes: string[]): { probs: numb
   if (found.size !== outcomes.length) return { error: "extra or duplicate outcomes in the FORECAST line" };
   const sum = pct.reduce((a, b) => a + b, 0);
   if (Math.abs(sum - 100) > 0.5) return { error: `percentages add up to ${sum}, not 100` };
-  // Same clipping the scoreboard applies to every forecast.
-  const clipped = pct.map((p) => Math.min(99, Math.max(1, p)) / 100);
-  const s = clipped.reduce((a, b) => a + b, 0);
-  return { probs: clipped.map((p) => Math.round((p / s) * 1e6) / 1e6) };
+  const bps = toBps(pct);
+  return { bps, probs: bps.map((x) => x / 10000) };
 }
 
 /** REE receipt, format 2.x, as written by `gensyn-sdk` 0.8. */
@@ -142,7 +162,7 @@ export interface ReceiptCheck { ok: boolean; reasons: string[]; model?: string; 
  * `outputText` must come from a source the scoreboard trusts: its own re-run, or the committed token ids
  * decoded with the model's tokenizer. Never from `text_output` alone.
  */
-export function checkReceipt(r: Receipt, m: MarketText, claimed: number[], outputText: string, research?: ResearchItem[], directive?: string): ReceiptCheck {
+export function checkReceipt(r: Receipt, m: MarketText, claimedBps: number[], outputText: string, research?: ResearchItem[], directive?: string): ReceiptCheck {
   const reasons: string[] = [];
   const v = validateReceipt(r);
   if (!v.ok) reasons.push("receipt hashes do not match: " + v.failed.join(", "));
@@ -161,7 +181,7 @@ export function checkReceipt(r: Receipt, m: MarketText, claimed: number[], outpu
   if ("error" in parsed) reasons.push("output: " + parsed.error);
   else {
     probs = parsed.probs;
-    if (claimed.length !== probs.length || claimed.some((c, i) => Math.abs(c - probs![i]) > 1e-6)) reasons.push("claimed probabilities differ from the model output");
+    if (claimedBps.length !== parsed.bps.length || claimedBps.some((c, i) => c !== parsed.bps[i])) reasons.push("claimed probabilities differ from the model output");
   }
   return { ok: reasons.length === 0, reasons, model: r.model.name, revision: r.model.commit_hash, reeVersion: r.ree_version, probs };
 }

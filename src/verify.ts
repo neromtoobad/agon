@@ -104,6 +104,26 @@ export async function verify(args: string[] = []) {
     }
     add("league batches match their forecasts", badRoot === 0, `${batches.length} batches, ${badRoot} whose root does not rebuild from its forecasts`);
     add("league roots on chain match", chainMismatch === 0, onChain ? `${onChain} batches read back from the contract, ${chainMismatch} differ` : "no batch is on chain yet (the contract is not deployed), so there is nothing to compare");
+    // Receipts: the stored text is still a valid REE receipt, it is the one the agent signed for, and every badge follows from signed re-runs.
+    const rc = await import("./receipt.ts"), { keccak256, toHex } = await import("viem");
+    const rs = db.prepare("SELECT r.*, f.receipt_hash signed, f.probs, f.market FROM league_receipts r JOIN league_forecasts f ON f.id = r.forecast_id").all() as any[];
+    let broken = 0, unsigned = 0, wrongBadge = 0;
+    for (const r of rs) {
+      let parsed: any = null;
+      try { parsed = JSON.parse(r.receipt); } catch { /* counted below */ }
+      if (!parsed || !rc.validateReceipt(parsed).ok) broken++;
+      if (!parsed || rc.receiptHashHex(parsed) !== r.receipt_hash || r.receipt_hash !== String(r.signed).toLowerCase()) unsigned++;
+      if (lg.statusFromReruns(r.receipt_hash, JSON.parse(r.probs), JSON.parse((db.prepare("SELECT outcomes FROM markets WHERE address = ?").get(r.market) as any)?.outcomes ?? "[]")) !== r.status) wrongBadge++;
+    }
+    add("league receipts are intact and signed for", broken === 0 && unsigned === 0, `${rs.length} receipts, ${broken} that no longer validate, ${unsigned} whose hash is not the one in the signed forecast`);
+    const vs = db.prepare("SELECT * FROM league_verifications").all() as any[];
+    let badReport = 0;
+    for (const v of vs) {
+      const message = { receiptHash: v.receipt_hash, matched: !!v.matched, outputHash: v.output_hash, reeVersion: v.ree_version ?? "", issuedAt: BigInt(v.issued_at) };
+      const ok = keccak256(toHex(v.output ?? "")) === v.output_hash && (await verifyTypedData({ address: v.verifier, domain: lg.DOMAIN, types: lg.TYPES, primaryType: "Verification", message, signature: v.signature }).catch(() => false));
+      if (!ok) badReport++;
+    }
+    add("league re-run badges follow from signed reports", badReport === 0 && wrongBadge === 0, `${vs.length} re-run reports, ${badReport} with a bad signature or output, ${wrongBadge} badges that do not follow from the reports`);
     const before = (db.prepare("SELECT COUNT(*) n, COALESCE(SUM(points), 0) p FROM league_scores").get() as any);
     lg.scoreAll();
     const after = (db.prepare("SELECT COUNT(*) n, COALESCE(SUM(points), 0) p FROM league_scores").get() as any);

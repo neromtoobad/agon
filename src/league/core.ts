@@ -1,6 +1,7 @@
 import { keccak256, concat, hashTypedData, verifyTypedData, isAddress, toHex, type Hex } from "viem";
 import { db, tx } from "../db.ts";
 import { network, lc } from "../config.ts";
+import { checkReceipt, validateReceipt, parseForecast, buildPrompt, receiptHashHex, STRICT_PACK, directiveFor, type Receipt, type MarketText } from "../receipt.ts";
 
 /**
  * The Agon scoreboard core.
@@ -21,6 +22,10 @@ export const TYPES = {
   Forecast: [
     { name: "market", type: "address" }, { name: "probabilities", type: "uint16[]" }, { name: "issuedAt", type: "uint64" },
     { name: "visibility", type: "uint8" }, { name: "reasoningHash", type: "bytes32" }, { name: "receiptHash", type: "bytes32" },
+  ],
+  Verification: [
+    { name: "receiptHash", type: "bytes32" }, { name: "matched", type: "bool" }, { name: "outputHash", type: "bytes32" },
+    { name: "reeVersion", type: "string" }, { name: "issuedAt", type: "uint64" },
   ],
 } as const;
 export const ZERO32 = ("0x" + "0".repeat(64)) as Hex;
@@ -48,6 +53,16 @@ CREATE INDEX IF NOT EXISTS lf_agent ON league_forecasts(agent, received_ts);
 CREATE TABLE IF NOT EXISTS league_batches (
   id INTEGER PRIMARY KEY AUTOINCREMENT, root TEXT NOT NULL, count INTEGER NOT NULL, created_ts INTEGER NOT NULL,
   anchored INTEGER NOT NULL DEFAULT 0, chain_batch INTEGER, tx TEXT, block INTEGER, contract TEXT
+);
+CREATE TABLE IF NOT EXISTS league_receipts (
+  forecast_id INTEGER PRIMARY KEY, receipt_hash TEXT NOT NULL, receipt TEXT NOT NULL, model TEXT, revision TEXT, ree_version TEXT,
+  tier TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'attached'
+);
+CREATE INDEX IF NOT EXISTS lr_hash ON league_receipts(receipt_hash);
+CREATE TABLE IF NOT EXISTS league_verifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, receipt_hash TEXT NOT NULL, verifier TEXT NOT NULL, matched INTEGER NOT NULL,
+  output TEXT, output_hash TEXT NOT NULL, ree_version TEXT, issued_at INTEGER NOT NULL, received_ts INTEGER NOT NULL, signature TEXT NOT NULL,
+  UNIQUE (receipt_hash, verifier)
 );
 CREATE TABLE IF NOT EXISTS league_scores (
   agent TEXT NOT NULL, market TEXT NOT NULL, points REAL NOT NULL, b_agent REAL NOT NULL, b_market REAL NOT NULL,
@@ -97,8 +112,16 @@ export const agentView = (a: any) => a && ({ address: a.address, name: a.name, u
 
 // ───────────────────────── forecasts
 
-export async function submitForecast(input: { address: string; message: any; signature: string; reasoning?: string }) {
+export async function submitForecast(input: { address: string; message: any; signature: string; reasoning?: string; receipt?: string }) {
   const { address, message: m, signature, reasoning } = input ?? ({} as any);
+  // The receipt must be the receipt file's text, byte for byte. Re-serialising it changes number formatting (1.0 becomes 1)
+  // and REE then rejects it as inconsistent, so it is kept and served exactly as received.
+  const receiptText: string | undefined = input?.receipt;
+  let receipt: Receipt | undefined;
+  if (receiptText != null) {
+    if (typeof receiptText !== "string" || receiptText.length > 400000) refuse("receipt must be the text of the receipt file, unmodified");
+    try { receipt = JSON.parse(receiptText); } catch { refuse("receipt is not valid JSON"); }
+  }
   if (!address || !isAddress(address)) refuse("address is missing or malformed");
   const a = lc(address);
   if (!db.prepare("SELECT 1 FROM league_agents WHERE address = ?").get(a)) refuse("this address is not a registered agent");
@@ -119,6 +142,17 @@ export async function submitForecast(input: { address: string; message: any; sig
     if (typeof reasoning !== "string" || reasoning.length > 4000) refuse("reasoning must be text of at most 4000 characters");
     if (keccak256(toHex(reasoning)) !== m.reasoningHash.toLowerCase()) refuse("reasoningHash is not the hash of the reasoning text");
   } else if (m.reasoningHash !== ZERO32) refuse("reasoningHash is set but no reasoning text was sent");
+  // A receipt is optional. When one is attached it must be well formed, be about this market, and say what the forecast says.
+  let tier: "strict" | "open" | null = null;
+  if (receipt != null) {
+    if (typeof receipt !== "object" || !receipt.input?.prompt || !receipt.hashes?.receipt_hash) refuse("receipt is not an REE receipt");
+    if (receiptHashHex(receipt) !== String(m.receiptHash).toLowerCase()) refuse("receiptHash in the signed message is not this receipt's hash");
+    const text = marketText(mk);
+    const strictPrompt = buildPrompt(text, STRICT_PACK, directiveFor(receipt.model?.name ?? ""));
+    tier = receipt.input.prompt === strictPrompt ? "strict" : "open";
+    const chk = checkReceipt(receipt, text, probs, receipt.output?.text_output ?? "", tier === "strict" ? STRICT_PACK : undefined, tier === "strict" ? directiveFor(receipt.model?.name ?? "") : undefined);
+    if (!chk.ok) refuse("receipt refused: " + chk.reasons.join("; "));
+  } else if (m.receiptHash !== ZERO32) refuse("receiptHash is set but no receipt was sent");
   const msg = { market: m.market as Hex, probabilities: probs, issuedAt: BigInt(issuedAt), visibility, reasoningHash: m.reasoningHash as Hex, receiptHash: m.receiptHash as Hex };
   const ok = await verifyTypedData({ address: address as Hex, domain: DOMAIN, types: TYPES, primaryType: "Forecast", message: msg, signature: signature as Hex }).catch(() => false);
   if (!ok) refuse("signature does not match this address and message");
@@ -129,7 +163,78 @@ export async function submitForecast(input: { address: string; message: any; sig
   if (db.prepare("SELECT 1 FROM league_forecasts WHERE leaf = ?").get(leaf)) refuse("this exact forecast was already received");
   const r = db.prepare(`INSERT INTO league_forecasts(agent, market, probs, issued_at, received_ts, visibility, reasoning, reasoning_hash, receipt_hash, digest, leaf, signature)
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(a, market, JSON.stringify(probs), issuedAt, t, visibility, reasoning ?? null, m.reasoningHash.toLowerCase(), m.receiptHash.toLowerCase(), digest, leaf, signature);
-  return { id: Number(r.lastInsertRowid), leaf, digest, received_at: new Date(t * 1000).toISOString(), sealed_until: visibility === 0 ? new Date(mk.trading_deadline * 1000).toISOString() : null };
+  const id = Number(r.lastInsertRowid);
+  if (receipt && tier) {
+    const rh = receiptHashHex(receipt);
+    // If someone already re-ran this exact receipt, judge this forecast against what that re-run said, not against the receipt's own text.
+    const status = statusFromReruns(rh, probs, JSON.parse(mk.outcomes));
+    db.prepare("INSERT INTO league_receipts(forecast_id, receipt_hash, receipt, model, revision, ree_version, tier, status) VALUES(?,?,?,?,?,?,?,?)")
+      .run(id, rh, receiptText!, receipt.model.name, receipt.model.commit_hash, receipt.ree_version ?? null, tier, status);
+    return { id, leaf, digest, received_at: new Date(t * 1000).toISOString(), sealed_until: visibility === 0 ? new Date(mk.trading_deadline * 1000).toISOString() : null, receipt: { tier, status } };
+  }
+  return { id, leaf, digest, received_at: new Date(t * 1000).toISOString(), sealed_until: visibility === 0 ? new Date(mk.trading_deadline * 1000).toISOString() : null, receipt: null };
+}
+
+const marketText = (mk: any): MarketText => ({ address: mk.address, metadataHash: mk.metadata_hash, question: mk.question, outcomes: JSON.parse(mk.outcomes), criteria: mk.criteria ?? "" });
+/** The exact prompt a strict-tier agent must run for a market and model. Public, so anyone can reproduce it. */
+export function strictPrompt(address: string, model: string) { const mk = fixture(address); return mk ? buildPrompt(marketText(mk), STRICT_PACK, directiveFor(model)) : null; }
+
+/**
+ * A verifier re-ran a receipt in REE and reports what came out. The badge "reproduced" needs the re-run to match
+ * AND the verifier's own output to say what the forecast says. The text inside a submitted receipt is never trusted.
+ */
+export async function submitVerification(input: { address: string; message: any; signature: string; output: string }) {
+  const { address, message: m, signature, output } = input ?? ({} as any);
+  if (!address || !isAddress(address)) refuse("address is missing or malformed");
+  const v = lc(address);
+  if (!db.prepare("SELECT 1 FROM league_agents WHERE address = ?").get(v)) refuse("verifiers must be registered wallets");
+  if (!m || !/^0x[0-9a-fA-F]{64}$/.test(m.receiptHash ?? "") || typeof m.matched !== "boolean") refuse("message is missing fields");
+  if (typeof output !== "string" || output.length > 20000) refuse("output must be the text your re-run produced");
+  if (keccak256(toHex(output)) !== String(m.outputHash).toLowerCase()) refuse("outputHash is not the hash of the output text");
+  const issuedAt = Number(m.issuedAt);
+  if (!Number.isFinite(issuedAt) || Math.abs(issuedAt - now()) > CLOCK_SKEW) refuse("issuedAt must be within ten minutes of now");
+  const ok = await verifyTypedData({ address: address as Hex, domain: DOMAIN, types: TYPES, primaryType: "Verification", message: { receiptHash: m.receiptHash, matched: m.matched, outputHash: m.outputHash, reeVersion: String(m.reeVersion ?? ""), issuedAt: BigInt(issuedAt) }, signature: signature as Hex }).catch(() => false);
+  if (!ok) refuse("signature does not match this address and message");
+  const rh = String(m.receiptHash).toLowerCase();
+  const rows = db.prepare("SELECT r.forecast_id, f.probs, f.market FROM league_receipts r JOIN league_forecasts f ON f.id = r.forecast_id WHERE r.receipt_hash = ?").all(rh) as any[];
+  if (!rows.length) refuse("no forecast carries this receipt");
+  db.prepare(`INSERT INTO league_verifications(receipt_hash, verifier, matched, output, output_hash, ree_version, issued_at, received_ts, signature) VALUES(?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(receipt_hash, verifier) DO UPDATE SET matched=excluded.matched, output=excluded.output, output_hash=excluded.output_hash, ree_version=excluded.ree_version, issued_at=excluded.issued_at, received_ts=excluded.received_ts, signature=excluded.signature`)
+    .run(rh, v, m.matched ? 1 : 0, output, String(m.outputHash).toLowerCase(), String(m.reeVersion ?? ""), issuedAt, now(), signature);
+  const results: any[] = [];
+  for (const row of rows) {
+    const status = statusFromReruns(rh, JSON.parse(row.probs), JSON.parse(fixture(row.market).outcomes));
+    db.prepare("UPDATE league_receipts SET status = ? WHERE forecast_id = ?").run(status, row.forecast_id);
+    results.push({ forecast: row.forecast_id, status });
+  }
+  return { receipt_hash: rh, forecasts: results };
+}
+
+/**
+ * attached   nobody has re-run this receipt yet
+ * failed     some re-run produced different tokens, or its output does not say what the forecast says
+ * reproduced every re-run matched, and its output says exactly what the forecast says
+ * One failed report outweighs earlier passes: the badge goes until the disagreement is looked at.
+ */
+export function statusFromReruns(receiptHash: string, claimedBps: number[], outcomes: string[]): "attached" | "reproduced" | "failed" {
+  const vs = db.prepare("SELECT matched, output FROM league_verifications WHERE receipt_hash = ?").all(receiptHash) as any[];
+  if (!vs.length) return "attached";
+  for (const v of vs) {
+    const parsed = parseForecast(v.output ?? "", outcomes);
+    const same = !("error" in parsed) && parsed.bps.length === claimedBps.length && parsed.bps.every((x, i) => x === claimedBps[i]);
+    if (!v.matched || !same) return "failed";
+  }
+  return "reproduced";
+}
+
+export function receiptView(forecastId: number, withReceipt: boolean) {
+  const r = db.prepare("SELECT * FROM league_receipts WHERE forecast_id = ?").get(forecastId) as any;
+  if (!r) return null;
+  const vs = db.prepare("SELECT verifier, matched, ree_version, received_ts FROM league_verifications WHERE receipt_hash = ? ORDER BY received_ts").all(r.receipt_hash) as any[];
+  const v: any = { status: r.status, tier: r.tier, model: r.model, revision: r.revision, ree_version: r.ree_version,
+    verifications: vs.map((x) => ({ verifier: x.verifier, matched: !!x.matched, ree_version: x.ree_version, at: new Date(x.received_ts * 1000).toISOString() })) };
+  if (withReceipt) { v.receipt_hash = r.receipt_hash; v.receipt = JSON.parse(r.receipt); v.receipt_text = r.receipt; }
+  return v;
 }
 
 /** leaf = keccak256(typed-data digest ‖ agent address). Publishing it reveals nothing about the forecast. */
@@ -140,6 +245,8 @@ export function forecastView(f: any, deadline: number) {
   const open = f.visibility === 1 || now() >= deadline;
   const v: any = { id: f.id, agent: f.agent, market: f.market, leaf: f.leaf, received_at: new Date(f.received_ts * 1000).toISOString(), sealed: !open, batch: f.batch };
   if (open) Object.assign(v, { probabilities: (JSON.parse(f.probs) as number[]).map((p) => p / 10000), issued_at: f.issued_at, visibility: f.visibility, reasoning: f.reasoning, reasoning_hash: f.reasoning_hash, receipt_hash: f.receipt_hash, digest: f.digest, signature: f.signature });
+  const rc = receiptView(f.id, open);
+  if (rc) v.receipt = rc;
   return v;
 }
 
@@ -233,8 +340,10 @@ export function scoreAll() {
 export function forecasterTable(season: number) {
   const rows = db.prepare(`SELECT a.address, a.name, a.model, a.client, COALESCE(SUM(s.points), 0) points, COUNT(s.market) markets,
       (SELECT COUNT(*) FROM league_forecasts f WHERE f.agent = a.address) forecasts,
-      (SELECT COUNT(DISTINCT f.market) FROM league_forecasts f JOIN markets m ON m.address = f.market WHERE f.agent = a.address AND m.status = 'open') open_markets
-    FROM league_agents a LEFT JOIN league_scores s ON s.agent = a.address AND s.season = ? GROUP BY a.address`).all(season) as any[];
+      (SELECT COUNT(DISTINCT f.market) FROM league_forecasts f JOIN markets m ON m.address = f.market WHERE f.agent = a.address AND m.status = 'open') open_markets,
+      (SELECT COUNT(*) FROM league_receipts r JOIN league_forecasts f ON f.id = r.forecast_id WHERE f.agent = a.address) receipts,
+      (SELECT COUNT(*) FROM league_receipts r JOIN league_forecasts f ON f.id = r.forecast_id WHERE f.agent = a.address AND r.status = 'reproduced') reproduced
+    FROM league_agents a LEFT JOIN league_scores s ON s.agent = a.address AND s.season = ? WHERE a.client != 'verifier' GROUP BY a.address`).all(season) as any[];
   return rows.map((r) => ({ ...r, points: Math.round(r.points * 100) / 100, ranked: r.markets >= RANK_MIN_FORECAST }))
     .sort((x, y) => Number(y.ranked) - Number(x.ranked) || y.points - x.points || y.markets - x.markets || y.forecasts - x.forecasts);
 }
@@ -247,4 +356,12 @@ export function traderTable(season: number) {
     GROUP BY a.address`).all(w.starts, w.ends) as any[];
   return rows.map((r) => ({ ...r, return: r.cost > 0 ? Math.round((r.profit / r.cost) * 1e4) / 1e4 : null, ranked: r.markets >= RANK_MIN_TRADES && r.cost >= RANK_MIN_COST }))
     .sort((x, y) => Number(y.ranked) - Number(x.ranked) || y.profit - x.profit);
+}
+
+/** Models seen in receipts: how many forecasts carry one, how many were reproduced, and the points their agents earned on those markets. */
+export function modelTable(season: number) {
+  return (db.prepare(`SELECT r.model, r.revision, COUNT(*) receipts, SUM(r.status = 'reproduced') reproduced, SUM(r.status = 'failed') failed, SUM(r.tier = 'strict') strict,
+      COUNT(DISTINCT f.agent) agents, COUNT(DISTINCT f.market) markets,
+      ROUND(COALESCE((SELECT SUM(s.points) FROM league_scores s WHERE s.season = ? AND EXISTS (SELECT 1 FROM league_receipts r2 JOIN league_forecasts f2 ON f2.id = r2.forecast_id WHERE r2.model = r.model AND r2.status = 'reproduced' AND f2.agent = s.agent AND f2.market = s.market)), 0), 2) points
+    FROM league_receipts r JOIN league_forecasts f ON f.id = r.forecast_id GROUP BY r.model, r.revision ORDER BY reproduced DESC, receipts DESC`).all(season) as any[]);
 }
