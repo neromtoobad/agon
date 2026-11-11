@@ -29,7 +29,8 @@ export const PORT = Number(process.env.PORT ?? 8787);
 export const LOG_SOURCE = (process.env.TRIPOD_SOURCE ?? "explorer") as "explorer" | "rpc";
 export const POLL_MS = Number(process.env.TRIPOD_POLL_MS ?? 15000);
 export const VERIFY_EVERY_MS = Number(process.env.TRIPOD_VERIFY_EVERY_MS ?? 6 * 3600 * 1000);
+export const ANCHOR_EVERY_MS = Number(process.env.AGON_ANCHOR_EVERY_MS ?? 10 * 60 * 1000);
 export const ADMIN_TOKEN = process.env.TRIPOD_ADMIN_TOKEN ?? "";
-export const UA = "tripod/0.1 (+open Delphi data layer)";
+export const UA = "agon/0.1 (+open scoreboard and data layer for Delphi)";
 
 export const lc = (a: string) => a.toLowerCase();

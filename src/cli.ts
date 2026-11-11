@@ -18,7 +18,7 @@ export async function syncAll(quiet = false) {
 
 function status() {
   const one = (q: string) => Object.values(db.prepare(q).get() as any)[0];
-  log(`tripod · ${network.name} · ${DB_PATH}`);
+  log(`agon · ${network.name} · ${DB_PATH}`);
   log(`head block ${one("SELECT COALESCE((SELECT block FROM cursors WHERE key='head'),0)")} · source ${LOG_SOURCE}`);
   log(`contracts ${one("SELECT COUNT(*) FROM contracts")} · markets ${one("SELECT COUNT(*) FROM markets")} · events ${one("SELECT COUNT(*) FROM events")}`);
   for (const r of db.prepare("SELECT role, mechanism, address, listed, explorer_name, n_events, factory, date(first_ts,'unixepoch') f, date(last_ts,'unixepoch') l FROM contracts ORDER BY first_block").all() as any[])
@@ -33,10 +33,10 @@ if (cmd === "sync") {
   status();
 } else if (cmd === "status") {
   status();
-} else if (["derive", "serve", "start", "export", "verify", "repair", "audit"].includes(cmd)) {
+} else if (["derive", "serve", "start", "export", "verify", "repair", "audit", "league"].includes(cmd)) {
   const m = await import("./commands.ts");
   await (m as any)[cmd](process.argv.slice(3));
 } else {
-  log("usage: node src/cli.ts <sync|derive|repair|audit|verify|serve|start|export|status>");
+  log("usage: node src/cli.ts <sync|derive|repair|audit|verify|serve|start|export|status|league anchor|league score>");
   process.exit(1);
 }

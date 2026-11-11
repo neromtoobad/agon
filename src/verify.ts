@@ -79,6 +79,37 @@ export async function verify(args: string[] = []) {
   const meta = db.prepare("SELECT SUM(metadata_verified=1) ok, SUM(metadata_verified=0) bad, SUM(metadata_verified=-1) gone, SUM(metadata_verified IS NULL) pending, COUNT(*) n FROM markets").get() as any;
   add("market text matches on-chain hash", meta.bad <= Math.ceil(meta.n * 0.01), `${meta.ok}/${meta.n} match, ${meta.bad} differ, ${meta.gone} missing, ${meta.pending} not fetched yet`);
 
+  // 5. The league record: every forecast is signed by its agent, sits in its batch, and every on-chain root matches.
+  const lg = await import("./league/core.ts"), an = await import("./league/anchor.ts"), { verifyTypedData, hashTypedData } = await import("viem");
+  const fs = db.prepare("SELECT * FROM league_forecasts ORDER BY id").all() as any[];
+  if (fs.length) {
+    let badSig = 0, badLeaf = 0;
+    for (const f of fs) {
+      const message = { market: f.market, probabilities: JSON.parse(f.probs), issuedAt: BigInt(f.issued_at), visibility: f.visibility, reasoningHash: f.reasoning_hash, receiptHash: f.receipt_hash };
+      const ok = await verifyTypedData({ address: f.agent, domain: lg.DOMAIN, types: lg.TYPES, primaryType: "Forecast", message, signature: f.signature }).catch(() => false);
+      if (!ok) badSig++;
+      if (lg.leafOf(hashTypedData({ domain: lg.DOMAIN, types: lg.TYPES, primaryType: "Forecast", message }), f.agent) !== f.leaf) badLeaf++;
+    }
+    add("league forecasts are signed by their agents", badSig === 0 && badLeaf === 0, `${fs.length} forecasts, ${badSig} bad signatures, ${badLeaf} leaves that do not match their message`);
+    const batches = db.prepare("SELECT * FROM league_batches ORDER BY id").all() as any[];
+    let badRoot = 0, onChain = 0, chainMismatch = 0;
+    for (const b of batches) {
+      const leaves = (db.prepare("SELECT leaf FROM league_forecasts WHERE batch = ? ORDER BY id").all(b.id) as any[]).map((r) => r.leaf);
+      if (leaves.length !== b.count || lg.merkleRoot(leaves).toLowerCase() !== b.root.toLowerCase()) badRoot++;
+      if (b.anchored && an.anchoring().configured && b.contract === an.anchoring().contract) {
+        onChain++;
+        const [root, count] = (await an.agonPublic().readContract({ address: b.contract, abi: an.AGON_ABI, functionName: "batches", args: [BigInt(b.chain_batch)] })) as [string, number, bigint];
+        if (root.toLowerCase() !== b.root.toLowerCase() || Number(count) !== b.count) chainMismatch++;
+      }
+    }
+    add("league batches match their forecasts", badRoot === 0, `${batches.length} batches, ${badRoot} whose root does not rebuild from its forecasts`);
+    add("league roots on chain match", chainMismatch === 0, onChain ? `${onChain} batches read back from the contract, ${chainMismatch} differ` : "no batch is on chain yet (the contract is not deployed), so there is nothing to compare");
+    const before = (db.prepare("SELECT COUNT(*) n, COALESCE(SUM(points), 0) p FROM league_scores").get() as any);
+    lg.scoreAll();
+    const after = (db.prepare("SELECT COUNT(*) n, COALESCE(SUM(points), 0) p FROM league_scores").get() as any);
+    add("league scores rebuild to the same values", before.n === after.n && Math.abs(before.p - after.p) < 1e-6, `${after.n} scores, total ${after.p.toFixed(4)} before and after a full re-score`);
+  }
+
   const report = { at: new Date().toISOString(), passed: checks.filter((c) => c.ok).length, failed: checks.filter((c) => !c.ok).length, checks };
   setMeta("verification", JSON.stringify(report));
   try { writeFileSync(join(dirname(DB_PATH), "verify.json"), JSON.stringify(report, null, 2)); } catch { /* read-only disk */ }

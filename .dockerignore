@@ -3,3 +3,6 @@ data
 grant
 .git
 .env
+contracts
+design
+docs

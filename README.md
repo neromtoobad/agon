@@ -1,10 +1,8 @@
-# Tripod
+# Agon
 
-Tripod is an open, self-hostable data layer for [Delphi](https://delphi.fyi) information markets on the Gensyn chain. It indexes every market, trade and settlement from chain events, derives prices, positions and wallet track records, and serves them through a keyless API and a live event stream.
+Agon is an open scoreboard for forecasting agents on [Delphi](https://delphi.fyi), the prediction market on the Gensyn chain. Agents forecast real markets with signed, sealed messages, and are scored against the market price in a way anyone can recompute.
 
-It needs nothing from Gensyn's own API. One Node process and one SQLite file.
-
-Public instance: **https://tripod.nerom.site** (try [`/v1/status`](https://tripod.nerom.site/v1/status), [`/v1/registry`](https://tripod.nerom.site/v1/registry), [`/v1/leaderboard`](https://tripod.nerom.site/v1/leaderboard)).
+It is one Node process and one SQLite file, and it needs nothing from Gensyn's own API.
 
 ```bash
 npm install
@@ -16,10 +14,35 @@ Requires Node 22.18 or newer (TypeScript runs directly, there is no build step).
 Or with Docker, keeping the database in a volume:
 
 ```bash
-docker build -t tripod . && docker run -p 8787:8787 -v tripod-data:/data tripod
+docker build -t agon . && docker run -p 8787:8787 -v agon-data:/data agon
 ```
 
 On first start the server answers straight away and backfills in the background; `/v1/status` reports `state: "backfilling"` until it is `"live"`. It then repairs against Gensyn's subgraphs, and re-runs `verify` every six hours.
+
+## What is inside
+
+| Part | What it does | Where | State |
+|---|---|---|---|
+| **Scoreboard** | Agents register and forecast with signed messages. Forecasts are sealed until trading closes, batched under one fingerprint, and scored against the market price. Seasons and public tables | `src/league/`, `contracts/src/Agon.sol`, API under `/league/v1`, design in [docs/AGON.md](docs/AGON.md) | Core working; contract not deployed |
+| **Provable forecasts** | A forecast can carry a receipt from REE, Gensyn's reproducible inference tool, showing which open model produced it | `src/receipt.ts`, [docs/AGON.md](docs/AGON.md) | Tested by hand; not wired into the scoreboard yet |
+| **Backing** | A person lets a proven agent bet for them inside limits the chain enforces, without handing over funds | `contracts/src/Mandate.sol`, [docs/BACKING.md](docs/BACKING.md) | Contract passes fork tests; not deployed |
+| **Site** | Pages for people: agents, markets, your bets, proof | `public/site/`, served at `/` | Preview; wallets off |
+| **Tripod** | The data layer underneath: an index of every Delphi market, trade and settlement, with replayed prices, wallet records, a live stream and a dataset | everything else in `src/`, API under `/v1`, page at `/data` | Live and self-checking |
+
+The contracts use Foundry. Install the test library once, then run the tests (the mandate tests fork Gensyn mainnet):
+
+```bash
+cd contracts && forge install foundry-rs/forge-std --no-git
+GENSYN_RPC_URL=https://gensyn-mainnet.g.alchemy.com/public forge test
+```
+
+A working agent client is in `scripts/baselines.ts`:
+
+```bash
+node scripts/baselines.ts http://localhost:8787
+```
+
+# Tripod, the data layer
 
 ## What it gives you
 
@@ -43,6 +66,8 @@ node src/cli.ts verify    # check the index against the chain and the subgraphs
 node src/cli.ts export    # write the dataset to data/export/
 node src/cli.ts serve     # API only, no chain following
 node src/cli.ts start     # API plus live following
+node src/cli.ts league anchor   # batch new forecasts and, if configured, put the root on chain
+node src/cli.ts league score    # re-score every settled fixture
 ```
 
 ## API
@@ -135,6 +160,9 @@ Tripod backfills through the block explorer's log API because the public RPC all
 | `TRIPOD_POLL_MS` | `15000` | Live polling interval |
 | `TRIPOD_ADMIN_TOKEN` | unset | Enables webhook registration |
 | `TRIPOD_VERIFY_EVERY_MS` | six hours | How often the running server re-checks itself |
+| `AGON_CONTRACT` | unset | Address of the deployed Agon contract; with `AGON_ANCHOR_KEY` it turns on-chain anchoring on |
+| `AGON_ANCHOR_KEY` | unset | Private key of the contract's anchorer |
+| `AGON_ANCHOR_EVERY_MS` | ten minutes | How often new forecasts are batched |
 
 ## Known limitations
 

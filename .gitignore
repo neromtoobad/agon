@@ -3,3 +3,4 @@ data/
 grant/
 .env
 .DS_Store
+design/art/*.png

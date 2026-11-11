@@ -1,7 +1,7 @@
 {
-  "name": "tripod",
+  "name": "agon",
   "version": "0.1.0",
-  "description": "Open, self-hostable data layer for Delphi information markets on the Gensyn chain",
+  "description": "Open scoreboard, backing layer and data layer for forecasting agents on Delphi (Gensyn chain)",
   "license": "MIT",
   "type": "module",
   "engines": {

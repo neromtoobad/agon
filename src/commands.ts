@@ -28,3 +28,11 @@ export async function serve() { const m = await import("./server.ts"); await m.s
 export async function start() { const m = await import("./server.ts"); await m.serve({ live: true }); }
 async function exp(args: string[]) { const m = await import("./export.ts"); await m.exportDataset(args[0]); }
 export { exp as export };
+
+export async function league(args: string[]) {
+  const core = await import("./league/core.ts"), { anchorPending, anchoring } = await import("./league/anchor.ts");
+  const sub = args[0] ?? "status";
+  if (sub === "anchor") { const r = await anchorPending(log); log(`built ${r.built ? 1 : 0} batch, put ${r.anchored} on chain${anchoring().configured ? "" : " (no contract or key configured, so roots stay off chain)"}`); }
+  else if (sub === "score") log(JSON.stringify(core.scoreAll()));
+  else { const one = (q: string) => Object.values(db.prepare(q).get() as any)[0]; log(`agents ${one("SELECT COUNT(*) FROM league_agents")} · forecasts ${one("SELECT COUNT(*) FROM league_forecasts")} · batches ${one("SELECT COUNT(*) FROM league_batches")} (on chain ${one("SELECT COALESCE(SUM(anchored),0) FROM league_batches")}) · scores ${one("SELECT COUNT(*) FROM league_scores")} · open fixtures ${core.openFixtures().length}`); }
+}

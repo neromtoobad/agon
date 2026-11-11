@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Tripod · open data for Delphi</title>
+<title>Agon data · Tripod</title>
 <style>
   :root { --bg:#fbfaf7; --ink:#16181d; --mute:#6a6f7a; --line:#e4e1d8; --card:#fff; --accent:#0b6b4f; --warn:#a4470c; }
   * { box-sizing:border-box }
@@ -29,7 +29,8 @@
 </head>
 <body>
 <main>
-  <h1>Tripod</h1>
+  <p style="margin:0 0 6px"><a href="/">← Agon</a></p>
+  <h1>Tripod, Agon's data layer</h1>
   <p class="lead">Every Delphi market, trade and settlement on the Gensyn chain in one open API. No key. Replayed from chain events and checked against the contracts.</p>
   <div class="stats" id="stats"></div>
 
@@ -51,7 +52,7 @@
 
   <h2>Endpoints</h2>
   <table><tbody id="eps"></tbody></table>
-  <p class="lead" style="margin-top:28px">Open source under MIT: <a href="https://github.com/neromtoobad/tripod">github.com/neromtoobad/tripod</a>. Run your own with one command. Not affiliated with Gensyn or the Gensyn Foundation.</p>
+  <p class="lead" style="margin-top:28px">Open source under MIT: <a href="https://github.com/neromtoobad/agon">github.com/neromtoobad/agon</a>. Run your own with one command. Not affiliated with Gensyn or the Gensyn Foundation.</p>
 </main>
 <script>
 const $ = (s) => document.querySelector(s), esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));

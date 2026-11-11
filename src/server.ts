@@ -2,11 +2,12 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { serve as nodeServe } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
 import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { db, getMeta, setMeta, getCursor, setCursor } from "./db.ts";
-import { network, PORT, POLL_MS, VERIFY_EVERY_MS, ADMIN_TOKEN, ROOT, lc } from "./config.ts";
+import { network, PORT, POLL_MS, VERIFY_EVERY_MS, ANCHOR_EVERY_MS, ADMIN_TOKEN, ROOT, lc } from "./config.ts";
 import { derive, dueForClock } from "./derive.ts";
 import { syncLogs, type NewEvent } from "./ingest.ts";
 import { syncRegistry, syncDpmConfig } from "./chain.ts";
@@ -14,6 +15,9 @@ import { syncMetadata } from "./metadata.ts";
 import { auditRange, repairFromSubgraphs } from "./repair.ts";
 import { marketView, eventView, iso, J } from "./views.ts";
 import { resolvedRecords, toCsv, toJsonl } from "./export.ts";
+import { mountLeague } from "./league/api.ts";
+import { scoreAll } from "./league/core.ts";
+import { anchorPending } from "./league/anchor.ts";
 
 const app = new Hono();
 app.use("*", cors());
@@ -279,6 +283,7 @@ async function tick() {
   await syncMetadata(undefined, 6);
   const touched = new Set([...fresh.map((e) => e.market), ...dueForClock(), ...(db.prepare("SELECT address FROM markets WHERE status IS NULL").all() as any[]).map((r) => r.address)]);
   if (touched.size) derive(touched);
+  if (fresh.some((e) => e.kind === "settled")) scoreAll();
   for (const e of toLive(fresh)) publish(e);
   for (const a of touched) { // clock-driven transitions have no chain event of their own
     const m = db.prepare("SELECT status, question FROM markets WHERE address=?").get(a) as any, was = before.get(a);
@@ -288,7 +293,14 @@ async function tick() {
   return fresh.length;
 }
 
-app.get("/", (c) => c.html(readFileSync(join(ROOT, "public", "index.html"), "utf8")));
+mountLeague(app);
+// The Agon site is the front page. Tripod, the data layer underneath, has its own page at /data.
+const page = (f: string) => (c: any) => c.html(readFileSync(join(ROOT, "public", f), "utf8"));
+app.get("/", page("site/index.html"));
+app.get("/data", page("data.html"));
+app.get("/agon", (c) => c.redirect("/"));
+app.get("/agon/", (c) => c.redirect("/"));
+app.use("/*", serveStatic({ root: join(ROOT, "public", "site") }));
 
 async function backfill() {
   setMeta("state", "backfilling");
@@ -306,7 +318,7 @@ async function runVerify() {
 export async function serve(opts: { live: boolean }) {
   // Listen first so a host's health check passes while a first-run backfill is still going.
   nodeServe({ fetch: app.fetch, port: PORT });
-  console.log(`tripod listening on http://localhost:${PORT} (${network.name}${opts.live ? ", live" : ", read-only"})`);
+  console.log(`agon listening on http://localhost:${PORT} (${network.name}${opts.live ? ", live" : ", read-only"})`);
   if (!opts.live) return;
   try {
     // "live" is only written once a backfill has completed, so a restart part-way through resumes it (cursors make that cheap).
@@ -319,6 +331,13 @@ export async function serve(opts: { live: boolean }) {
     setTimeout(loop, POLL_MS);
   };
   loop();
+  // League housekeeping: batch new forecasts and put roots on chain (when an anchorer is configured).
+  const anchorLoop = async () => {
+    try { await anchorPending((m) => console.log(m)); } catch (e) { console.error("anchor failed:", (e as Error).message); }
+    setTimeout(anchorLoop, ANCHOR_EVERY_MS);
+  };
+  setTimeout(anchorLoop, 20_000);
+  scoreAll();
   setTimeout(runVerify, 60_000);
   setInterval(runVerify, VERIFY_EVERY_MS);
 }
