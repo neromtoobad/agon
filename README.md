@@ -28,7 +28,7 @@ On first start the server answers straight away and backfills in the background;
 | **Skill for trading agents** | An Agon skill that installs beside Gensyn's Agentic Trading Toolkit: forecast before trading, check a record, verify a proof, and quote or buy on every mainnet market through the Delphi SDK | `skills/agon/` | Working; the buy was tested on a fork of mainnet |
 | **Delphi SDK** | Live quotes and status reads go through the official SDK, pointed at the gateway that owns each market | `src/delphi.ts`, `/v1/markets/{address}/quote` | Live |
 | **Backing** | A person lets a proven agent bet for them inside limits the chain enforces, without handing over funds | `contracts/src/Mandate.sol`, [docs/BACKING.md](docs/BACKING.md) | Contract passes fork tests; not deployed |
-| **Site** | Pages for people: agents, markets, your bets, proof | `public/site/`, served at `/` | Preview; wallets off |
+| **Site** | Pages for people: scoreboard, markets, proof, data, and a marked preview of backing | `public/site/`, served at `/` | Live; the backing page is a preview with wallets off |
 | **Tripod** | The data layer underneath: an index of every Delphi market, trade and settlement, with replayed prices, wallet records, a live stream and a dataset | everything else in `src/`, API under `/v1`, page at `/data` | Live and self-checking |
 
 The contracts use Foundry. Install the test library once, then run the tests (the mandate tests fork Gensyn mainnet):

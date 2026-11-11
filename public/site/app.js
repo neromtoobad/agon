@@ -40,7 +40,7 @@ function modal(html) {
   $(".veil").onclick = (e) => { if (e.target.classList.contains("veil")) $("#modal").innerHTML = ""; };
 }
 const notLive = () => modal(`<h3>Wallets are switched off in this preview</h3><p>The mandate contract is written and passes its tests against the live Delphi contracts on a fork of Gensyn mainnet. It is not deployed yet, so nothing here can move money.</p><p><a href="#/proof">See the proof</a></p>`);
-$("#connect").onclick = notLive;
+if ($("#connect")) $("#connect").onclick = notLive;
 
 const agentCard = (a) => `
   <a class="card agent" href="#/agent/${a.id}">
@@ -66,55 +66,72 @@ const marketTable = (ms) => `<div class="card scroll"><table><thead><tr><th>Ques
 // ───────────────────────── pages
 
 async function home() {
-  const [mk, ls, tb] = await Promise.all([api("/v1/markets?status=open&order=volume&limit=6").catch(() => ({ markets: [] })), league("/status").catch(() => null), league("/table").catch(() => ({ rows: [] }))]);
+  const [mk, ls, tb, mt] = await Promise.all([api("/v1/markets?status=open&order=volume&limit=6").catch(() => ({ markets: [] })), league("/status").catch(() => null), league("/table").catch(() => ({ rows: [] })), league("/table?ladder=models").catch(() => ({ rows: [] }))]);
+  const rerun = mt.rows.reduce((n, r) => n + r.reproduced, 0);
   return `
   <div class="hero">
     <div>
-      <div class="tag">Forecasting agents on Delphi</div>
-      <h1>Let a proven agent <i>bet for you.</i></h1>
-      <p class="lead">Pick an agent with a public record on Delphi. Set a limit. It bets inside that limit, and the chain refuses anything over it. Stop any time.</p>
-      <div class="row" style="max-width:420px"><a class="btn go" href="#/agents">See the agents</a><a class="btn" href="#how">How it works</a></div>
+      <div class="tag">Open scoreboard for forecasting agents on Delphi</div>
+      <h1>See which agents <i>call it right.</i></h1>
+      <p class="lead">Agents sign a forecast for each Delphi market before it closes. Agon keeps it sealed, writes its fingerprint to the Gensyn chain, and scores it against the market price once Delphi settles. Free to enter, and every number can be checked.</p>
+      <div class="row" style="max-width:440px"><a class="btn go" href="#/agents">See the scoreboard</a><a class="btn" href="#enter">Enter your agent</a></div>
     </div>
     <div class="art" style="background-image:url(art/banner.jpg);background-position:center 70%"></div>
   </div>
 
+  ${ls ? `<section style="margin-top:30px">
+    <div class="grid4">
+      <div class="card pad"><b class="num">${ls.forecasts.toLocaleString()}</b><div class="tag">Signed forecasts</div></div>
+      <div class="card pad"><b class="num">${ls.batches_on_chain} of ${ls.batches}</b><div class="tag">Batches written to the chain</div></div>
+      <div class="card pad"><b class="num">${rerun}</b><div class="tag">Forecasts re-run and matched</div></div>
+      <div class="card pad"><b class="num">${ls.open_fixtures}</b><div class="tag">Markets that count now</div></div>
+    </div>
+  </section>` : ""}
+
   <section id="how">
-    <div class="head"><h2>How it works</h2></div>
-    <div class="steps">
-      <div class="card pad step"><div class="n">1</div><h3>Pick an agent</h3><p>Every agent has a public record: how often it was right, and how much better than the market price. Records are rebuilt from chain data, so they cannot be edited.</p></div>
-      <div class="card pad step"><div class="n">2</div><h3>Set your limits</h3><p>The most per bet, per day and in total, and an end date. Your money stays in your own wallet until a bet is placed.</p></div>
-      <div class="card pad step"><div class="n">3</div><h3>It bets, you hold</h3><p>When the agent bets its own money, it places the same bet for you. The shares land in your wallet and you redeem them on Delphi.</p></div>
+    <div class="head"><h2>What every forecast proves</h2><a href="#/proof">Check it yourself →</a></div>
+    <div class="grid4 text">
+      <div class="card pad step"><div class="n">1</div><h3>Who</h3><p>Signed by the agent's wallet. Nobody else can post in its name.</p></div>
+      <div class="card pad step"><div class="n">2</div><h3>When</h3><p>Sealed until trading closes, with its fingerprint on the Gensyn chain. It cannot be edited or backdated.</p></div>
+      <div class="card pad step"><div class="n">3</div><h3>How</h3><p>An agent can attach a receipt naming the open model that made the forecast. A verifier re-runs it and must get the same answer.</p></div>
+      <div class="card pad step"><div class="n">4</div><h3>How good</h3><p>Scored against the market price for as long as the forecast stood. Copying the price scores zero.</p></div>
     </div>
   </section>
 
   ${ls ? `<section>
     <div class="head"><h2>The scoreboard, season ${ls.season}</h2><span class="chip teal">live</span></div>
-    <div class="grid3" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px">
-      <div class="card pad"><b class="num">${ls.agents}</b><div class="tag">Agents registered</div></div>
-      <div class="card pad"><b class="num">${ls.forecasts}</b><div class="tag">Signed forecasts</div></div>
-      <div class="card pad"><b class="num">${ls.sealed_now}</b><div class="tag">Sealed until close</div></div>
-      <div class="card pad"><b class="num">${ls.open_fixtures}</b><div class="tag">Markets that count</div></div>
-    </div>
     ${liveTable(tb.rows)}
-    <p class="lead" style="margin-top:14px">The first agents are baselines, there as reference lines. Points appear as Delphi settles each market. Season ${ls.season} ends ${when(ls.season_ends)}.</p>
+    <p class="lead" style="margin-top:14px">Three of these are baselines, there as reference lines. Athena is the reference agent: each of her forecasts carries a receipt and is re-run by a verifier. Points appear as Delphi settles each market. Season ${ls.season} ends ${when(ls.season_ends)}. <a href="#/agents">Full scoreboard →</a></p>
   </section>` : ""}
 
-  <section>
-    <div class="head"><h2>House agents, joining soon ${SAMPLE}</h2><a href="#/agents">All agents →</a></div>
-    <div class="grid3">${AGENTS.slice(0, 3).map(agentCard).join("")}</div>
+  <section id="enter">
+    <div class="head"><h2>Enter your agent</h2><span class="chip">free, no account</span></div>
+    <div class="grid3">
+      <div class="card pad"><h3>Sign one message</h3><p>Register a wallet, then send a signed forecast for any market that counts. No key and no fee.</p><p><a href="/league/v1/signing">What to sign</a> · <a href="https://github.com/neromtoobad/agon/blob/main/scripts/baselines.ts">A working example</a></p></div>
+      <div class="card pad"><h3>Trading with Gensyn's Toolkit?</h3><p>Add the Agon skill to the same project. It uses the same wallet and settings.</p><code class="cmd">npx skills add https://github.com/neromtoobad/agon --skill agon</code></div>
+      <div class="card pad"><h3>Prove which model you ran</h3><p>Run an open model inside REE, Gensyn's reproducible inference tool, and attach the receipt. The reference agent does it end to end.</p><p><a href="https://github.com/neromtoobad/agon/blob/main/scripts/reference-agent.ts">The reference agent</a> · <a href="https://github.com/neromtoobad/agon/blob/main/scripts/verifier.ts">The verifier</a></p></div>
+    </div>
   </section>
 
   <section>
     <div class="head"><h2>Open on Delphi now</h2><a href="#/markets">All markets →</a></div>
     ${mk.markets.length ? marketTable(mk.markets) : '<div class="card pad">Could not load markets.</div>'}
+  </section>
+
+  <section id="next">
+    <div class="head"><h2>Next: let a proven agent bet for you</h2><span class="chip sun">not live yet</span></div>
+    <div class="card pad">
+      <p class="lead" style="margin:0 0 14px">Once agents have records, a person will be able to let one place small Delphi bets for them, inside limits the chain enforces. The contract for this is written and tested against the live Delphi contracts. It is not deployed, so wallets are off.</p>
+      <div class="row" style="max-width:260px"><a class="btn" href="#/bets">See the preview</a></div>
+    </div>
   </section>`;
 }
 
 async function agents() {
   const [lb, tb, mt] = await Promise.all([api("/v1/leaderboard?by=pnl&limit=8").catch(() => ({ wallets: [] })), league("/table").catch(() => ({ rows: [] })), league("/table?ladder=models").catch(() => ({ rows: [] }))]);
   return `
-  <div class="tag">Agents</div>
-  <h1>Who to back.</h1>
+  <div class="tag">Scoreboard</div>
+  <h1>Who forecasts best.</h1>
   <p class="lead">Points measure how much closer to the truth an agent was than the market price. Copying the price scores zero. <b>Reproducible</b> means anyone can re-run the agent's model and get the same forecast.</p>
   <div class="head"><h2>On the scoreboard now</h2><span class="chip teal">live</span></div>
   ${tb.rows.length ? liveTable(tb.rows) : '<div class="card pad">No agent has registered yet.</div>'}
@@ -127,11 +144,6 @@ async function agents() {
   ${mt.rows.map((r) => `<tr><td><b>${esc(r.model)}</b></td><td class="mono">${esc((r.revision || "").slice(0, 10))}</td><td class="n">${r.agents}</td><td class="n">${r.markets}</td><td class="n">${r.receipts}</td><td class="n"><span class="up">${r.reproduced}</span></td><td class="n">${r.failed}</td><td class="n">${r.points.toFixed(1)}</td></tr>`).join("")}
   </tbody></table></div>
   </section>` : ""}
-
-  <section>
-  <div class="head"><h2>House agents, joining soon ${SAMPLE}</h2></div>
-  <div class="grid3">${AGENTS.filter((x) => !tb.rows.some((r) => r.name.toLowerCase() === x.id)).map(agentCard).join("")}</div>
-  </section>
 
   <section>
     <div class="head"><h2>Traders on Delphi today</h2><span class="chip teal">live</span></div>
@@ -258,13 +270,7 @@ async function call(address) {
         ${lf.latest.length ? lf.latest.map((f) => `<div class="row" style="align-items:center;gap:12px;margin:12px 0;flex-wrap:nowrap">${tile({ address: f.agent, name: f.agent_name })}<div style="flex:1"><a href="#/agent/${f.agent}"><b>${esc(f.agent_name)}</b></a> ${f.receipt?.status === "reproduced" ? '<span class="chip teal">reproduced</span>' : ""}<div style="font-size:12px;color:var(--mute)">${when(f.received_at)}${f.receipt ? " · " + esc(f.receipt.model) : ""}</div></div>${f.sealed ? '<span class="chip sun">sealed</span>' : `<span class="num">${pct(f.probabilities?.[top])}</span>`}</div>`).join("") : "<p>No agent has forecast this market yet.</p>"}
         <p style="font-size:12px;color:var(--mute);margin:10px 0 0">Sealed forecasts open when trading closes, ${when(lf.trading_closes_at)}.</p>
       </div><div style="height:20px"></div>` : `<div class="note">This market does not count for the league: it was open for less than 12 hours, or its text could not be matched to the chain.</div>`}
-      <div class="card pad">
-        <div class="tag">House agents on this market ${SAMPLE}</div>
-        ${[[a, fa], [b, fb]].map(([g, f]) => `<div class="row" style="align-items:center;gap:12px;margin:12px 0"><div class="avatar" style="background-image:url(art/${g.art}.jpg)"></div><div style="flex:1"><b>${g.name}</b> says ${esc(m.outcomes?.[top] ?? "")}<div style="font-size:12px;color:var(--mute)">market ${pct(probs[top])}</div></div><span class="num">${pct(f)}</span></div>`).join("")}
-        <div class="case"><div><b>For</b>The case each agent makes appears here once agents are live.</div><div><b>Against</b>And the strongest argument on the other side, in the Delphi Duel format.</div></div>
-      </div>
-      <div style="height:20px"></div>
-      ${m.status === "open" ? backPanel(a, m) : `<div class="card pad"><h2>Trading has closed</h2><p>This market is ${esc(m.status.replace(/_/g, " "))}${m.winning_label ? `. It settled to <b>${esc(m.winning_label)}</b>` : ""}.</p></div>`}
+      ${m.status === "open" ? `<div class="card pad"><h3>Forecast this market</h3><p>Any agent can forecast it until trading closes, by signing one message. It costs nothing.</p><div class="row" style="max-width:240px"><a class="btn" href="#enter">How to enter</a></div></div>` : `<div class="card pad"><h2>Trading has closed</h2><p>This market is ${esc(m.status.replace(/_/g, " "))}${m.winning_label ? `. It settled to <b>${esc(m.winning_label)}</b>` : ""}.</p></div>`}
     </div>
   </div>`;
 }
@@ -272,15 +278,26 @@ async function call(address) {
 function bets() {
   const ms = store.get();
   return `
-  <div class="tag">Your bets ${SAMPLE}</div>
-  <h1>What you have allowed.</h1>
+  <div class="tag">Backing <span class="chip sun">preview, not live</span></div>
+  <h1>Let a proven agent bet for you.</h1>
+  <p class="lead">This is the next step after the scoreboard, shown here as a preview. The agents, records and mandates on this page are samples, wallets are off, and nothing here can move money. The contract behind it is written and passes its tests against the live Delphi contracts; it is not deployed.</p>
+  <div class="steps">
+    <div class="card pad step"><div class="n">1</div><h3>Pick an agent</h3><p>Choose one by its record on the scoreboard: how much closer to the truth it was than the market price.</p></div>
+    <div class="card pad step"><div class="n">2</div><h3>Set your limits</h3><p>The most per bet, per day and in total, and an end date. Your money stays in your own wallet until a bet is placed.</p></div>
+    <div class="card pad step"><div class="n">3</div><h3>It bets, you hold</h3><p>When the agent bets its own money, it places the same bet for you. The chain refuses anything over your limits, and you can stop it any time.</p></div>
+  </div>
+  <section>
+    <div class="head"><h2>Try the flow with sample agents ${SAMPLE}</h2></div>
+    <div class="grid3">${AGENTS.map(agentCard).join("")}</div>
+  </section>
+  <div class="head"><h2>What you have allowed ${SAMPLE}</h2></div>
   <p class="lead">Each mandate lets one agent bet for you inside the limits shown. Revoke stops it immediately. In this preview, mandates are stored in your browser only.</p>
   ${ms.length ? `<div class="grid3">${ms.map((x, i) => { const a = agentBy(x.agent); const spent = x.spent ?? 0; return `
     <div class="card pad"><div class="row" style="align-items:center;gap:12px;margin-bottom:10px"><div class="avatar" style="background-image:url(art/${a.art}.jpg)"></div><div style="flex:1"><h3 style="margin:0">${a.name}</h3><span class="chip ${x.side === "fade" ? "pink" : "teal"}">${x.side === "fade" ? "Fading" : "Backing"}</span></div></div>
       <div class="kv"><span>Per bet</span><b>${usd(x.bet, 2)}</b><span>Per day</span><b>${usd(x.day, 2)}</b><span>Total</span><b>${usd(x.total, 2)}</b><span>Ends</span><b>${when(x.ends)}</b></div>
       <div class="tag" style="margin:14px 0 6px">${usd(spent, 2)} of ${usd(x.total, 2)} used</div><div class="meter"><i style="width:${Math.min(100, (spent / x.total) * 100)}%"></i></div>
       <div class="row" style="margin-top:16px"><button class="btn dark" data-revoke="${i}">Revoke</button></div></div>`; }).join("")}</div>`
-  : `<div class="card pad"><h2>Nothing yet</h2><p>You have not allowed any agent to bet for you.</p><div class="row" style="max-width:260px"><a class="btn go" href="#/agents">See the agents</a></div></div>`}`;
+  : `<div class="card pad"><h3>Nothing yet</h3><p>Open a sample agent above and press Back to see how a mandate looks.</p></div>`}`;
 }
 
 async function proof() {
@@ -317,6 +334,7 @@ async function proof() {
 
 // ───────────────────────── router and events
 
+if ("scrollRestoration" in history) history.scrollRestoration = "manual"; // the page decides where to scroll, not the browser
 async function route() {
   const [, r = "", arg] = location.hash.replace(/^#/, "").split("/");
   document.querySelectorAll("nav a.l").forEach((l) => l.classList.toggle("on", l.dataset.r === r || (r === "agent" && l.dataset.r === "agents") || (r === "call" && l.dataset.r === "markets")));
@@ -324,7 +342,8 @@ async function route() {
   app.innerHTML = `<p class="tag" style="padding:60px 0">Loading…</p>`;
   const view = r === "agents" ? agents() : r === "agent" ? (/^0x[0-9a-fA-F]{40}$/.test(arg || "") ? liveAgent(arg) : agent(arg)) : r === "markets" ? markets() : r === "call" ? call(arg) : r === "bets" ? bets() : r === "proof" ? proof() : home();
   app.innerHTML = await view;
-  if (location.hash === "#how") $("#how")?.scrollIntoView(); else window.scrollTo(0, 0);
+  const anchor = /^#[a-z]+$/.test(location.hash) ? document.getElementById(location.hash.slice(1)) : null;
+  if (anchor) setTimeout(() => anchor.scrollIntoView({ behavior: "instant", block: "start" }), 80); else window.scrollTo(0, 0);
   sum();
   quotes();
 }
