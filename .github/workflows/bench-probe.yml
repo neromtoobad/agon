@@ -1,0 +1,40 @@
+# One-off probe: does a model run inside REE on a GitHub-hosted machine, and does it answer in the asked format?
+# Nothing is signed or sent. Start it by hand from the Actions tab with a JSON list of Hugging Face model ids.
+name: bench-probe
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: JSON list of Hugging Face model ids
+        required: true
+        default: '["Qwen/Qwen3-0.6B"]'
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        model: ${{ fromJSON(inputs.models) }}
+    env:
+      AGON_REE_CACHE: /mnt/ree-cache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Make room for the REE image (about 22 GB unpacked)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo mkdir -p "$AGON_REE_CACHE" && sudo chmod -R 777 "$AGON_REE_CACHE"
+          df -h / /mnt | sed 's/^/disk: /'
+          free -g | sed 's/^/memory: /'
+          nproc | sed 's/^/cores: /'
+      - run: npm ci --omit=dev
+      - name: Pull REE
+        run: docker pull -q gensynai/ree:v0.8.0
+      - name: Run the model on two live markets (dry run)
+        run: node scripts/reference-agent.ts https://agon.nerom.site --model "${{ matrix.model }}" --dry-run --limit 2
+      - name: What it left on disk
+        if: always()
+        run: sudo du -sh "$AGON_REE_CACHE"/* 2>/dev/null | sed 's/^/cache: /'; df -h / /mnt | sed 's/^/disk: /'
