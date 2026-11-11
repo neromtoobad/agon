@@ -37,4 +37,6 @@ jobs:
         run: node scripts/reference-agent.ts https://agon.nerom.site --model "${{ matrix.model }}" --dry-run --limit 2
       - name: What it left on disk
         if: always()
-        run: sudo du -sh "$AGON_REE_CACHE"/* 2>/dev/null | sed 's/^/cache: /'; df -h / /mnt | sed 's/^/disk: /'
+        run: |
+          sudo du -sh "$AGON_REE_CACHE"/* 2>/dev/null | sed 's/^/cache: /' || true
+          df -h / /mnt | sed 's/^/disk: /'
