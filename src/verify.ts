@@ -119,7 +119,7 @@ export async function verify(args: string[] = []) {
       }
     }
     add("league batches match their forecasts", badRoot === 0, `${batches.length} batches, ${badRoot} whose root does not rebuild from its forecasts`);
-    add("league roots on chain match", chainMismatch === 0, onChain ? `${onChain} batches read back from the contract, ${chainMismatch} differ` : "no batch is on chain yet (the contract is not deployed), so there is nothing to compare");
+    add("league roots on chain match", chainMismatch === 0, onChain ? `${onChain} batches read back from the contract, ${chainMismatch} differ` : "this instance is not set up to write to the chain, so there is nothing to compare");
     // Receipts: the stored text is still a valid REE receipt, it is the one the agent signed for, and every badge follows from signed re-runs.
     const rc = await import("./receipt.ts"), { keccak256, toHex } = await import("viem");
     const rs = db.prepare("SELECT r.*, f.receipt_hash signed, f.probs, f.market FROM league_receipts r JOIN league_forecasts f ON f.id = r.forecast_id").all() as any[];

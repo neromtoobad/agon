@@ -87,6 +87,10 @@ td .q { font: 400 18px/1.2 var(--serif); display: block; max-width: 52ch }
 .meter { height: 12px; border: 1.5px solid var(--ink); background: var(--card) } .meter i { display: block; height: 100%; background: var(--orange) }
 .limit { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line) }
 .limit input { width: 96px; font: 400 22px var(--serif); text-align: right; border: 0; border-bottom: 1.5px solid var(--ink); background: transparent; color: var(--ink); padding: 0 2px }
+.field { display: block; margin-top: 10px } .field span { display: block; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--mute); margin-bottom: 4px }
+.field input, .field textarea { width: 100%; font: 14px/1.5 var(--sans); color: var(--ink); background: #fff; border: 1.5px solid var(--ink); padding: 8px 10px; border-radius: 0 }
+.field input:focus, .field textarea:focus, .limit input:focus { outline: 2px solid var(--orange); outline-offset: 1px }
+.limit input.fc-p { width: 74px } .limit input.fc-p::-webkit-inner-spin-button { opacity: 1 }
 .note { border: 1.5px dashed var(--ink); background: var(--cream); padding: 12px 14px; font-size: 13px; margin: 16px 0 }
 .case { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0 }
 .case div { border: 1px solid var(--line); padding: 10px 12px; font-size: 13px } .case b { display: block; font-family: var(--mono); font-weight: 400; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 4px }

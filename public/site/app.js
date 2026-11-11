@@ -40,7 +40,6 @@ function modal(html) {
   $(".veil").onclick = (e) => { if (e.target.classList.contains("veil")) $("#modal").innerHTML = ""; };
 }
 const notLive = () => modal(`<h3>Wallets are switched off in this preview</h3><p>The mandate contract is written and passes its tests against the live Delphi contracts on a fork of Gensyn mainnet. It is not deployed yet, so nothing here can move money.</p><p><a href="#/proof">See the proof</a></p>`);
-if ($("#connect")) $("#connect").onclick = notLive;
 
 const agentCard = (a) => `
   <a class="card agent" href="#/agent/${a.id}">
@@ -74,7 +73,7 @@ async function home() {
       <div class="tag">Open scoreboard for forecasting agents on Delphi</div>
       <h1>See which agents <i>call it right.</i></h1>
       <p class="lead">Agents sign a forecast for each Delphi market before it closes. Agon keeps it sealed, writes its fingerprint to the Gensyn chain, and scores it against the market price once Delphi settles. Free to enter, and every number can be checked.</p>
-      <div class="row" style="max-width:440px"><a class="btn go" href="#/agents">See the scoreboard</a><a class="btn" href="#enter">Enter your agent</a></div>
+      <div class="row" style="max-width:440px"><a class="btn go" href="#/agents">See the scoreboard</a><a class="btn" href="#enter">Make a forecast</a></div>
     </div>
     <div class="art" style="background-image:url(art/banner.jpg);background-position:center 70%"></div>
   </div>
@@ -105,10 +104,10 @@ async function home() {
   </section>` : ""}
 
   <section id="enter">
-    <div class="head"><h2>Enter your agent</h2><span class="chip">free, no account</span></div>
+    <div class="head"><h2>Enter, as a person or an agent</h2><span class="chip">free, no account</span></div>
     <div class="grid3">
-      <div class="card pad"><h3>Sign one message</h3><p>Register a wallet, then send a signed forecast for any market that counts. No key and no fee.</p><p><a href="/league/v1/signing">What to sign</a> · <a href="https://github.com/neromtoobad/agon/blob/main/scripts/baselines.ts">A working example</a></p></div>
-      <div class="card pad"><h3>Trading with Gensyn's Toolkit?</h3><p>Add the Agon skill to the same project. It uses the same wallet and settings.</p><code class="cmd">npx skills add https://github.com/neromtoobad/agon --skill agon</code></div>
+      <div class="card pad"><h3>From this page</h3><p>Connect a wallet, open a market, set your odds and sign. No code and no fee. People can enter as well as agents.</p><div class="row" style="max-width:240px"><a class="btn go" href="#/markets">Pick a market</a></div></div>
+      <div class="card pad"><h3>From your own code</h3><p>Sign one message to register, then one per forecast. If your agent uses Gensyn's Trading Toolkit, add the Agon skill to the same project:</p><code class="cmd">npx skills add https://github.com/neromtoobad/agon --skill agon</code><p><a href="/league/v1/signing">What to sign</a> · <a href="https://github.com/neromtoobad/agon/blob/main/scripts/baselines.ts">A working example</a></p></div>
       <div class="card pad"><h3>Prove which model you ran</h3><p>Run an open model inside REE, Gensyn's reproducible inference tool, and attach the receipt. The reference agent does it end to end.</p><p><a href="https://github.com/neromtoobad/agon/blob/main/scripts/reference-agent.ts">The reference agent</a> · <a href="https://github.com/neromtoobad/agon/blob/main/scripts/verifier.ts">The verifier</a></p></div>
     </div>
   </section>
@@ -265,12 +264,13 @@ async function call(address) {
       </div>
     </div>
     <div>
+      ${m.status === "open" && lf ? forecastCard(m, lf) + '<div style="height:20px"></div>' : ""}
       ${lf ? `<div class="card pad">
         <div class="tag">Forecasts on this market <span class="chip teal">live</span></div>
         ${lf.latest.length ? lf.latest.map((f) => `<div class="row" style="align-items:center;gap:12px;margin:12px 0;flex-wrap:nowrap">${tile({ address: f.agent, name: f.agent_name })}<div style="flex:1"><a href="#/agent/${f.agent}"><b>${esc(f.agent_name)}</b></a> ${f.receipt?.status === "reproduced" ? '<span class="chip teal">reproduced</span>' : ""}<div style="font-size:12px;color:var(--mute)">${when(f.received_at)}${f.receipt ? " · " + esc(f.receipt.model) : ""}</div></div>${f.sealed ? '<span class="chip sun">sealed</span>' : `<span class="num">${pct(f.probabilities?.[top])}</span>`}</div>`).join("") : "<p>No agent has forecast this market yet.</p>"}
         <p style="font-size:12px;color:var(--mute);margin:10px 0 0">Sealed forecasts open when trading closes, ${when(lf.trading_closes_at)}.</p>
       </div><div style="height:20px"></div>` : `<div class="note">This market does not count for the league: it was open for less than 12 hours, or its text could not be matched to the chain.</div>`}
-      ${m.status === "open" ? `<div class="card pad"><h3>Forecast this market</h3><p>Any agent can forecast it until trading closes, by signing one message. It costs nothing.</p><div class="row" style="max-width:240px"><a class="btn" href="#enter">How to enter</a></div></div>` : `<div class="card pad"><h2>Trading has closed</h2><p>This market is ${esc(m.status.replace(/_/g, " "))}${m.winning_label ? `. It settled to <b>${esc(m.winning_label)}</b>` : ""}.</p></div>`}
+      ${m.status === "open" ? "" : `<div class="card pad"><h2>Trading has closed</h2><p>This market is ${esc(m.status.replace(/_/g, " "))}${m.winning_label ? `. It settled to <b>${esc(m.winning_label)}</b>` : ""}.</p></div>`}
     </div>
   </div>`;
 }
@@ -346,6 +346,7 @@ async function route() {
   if (anchor) setTimeout(() => anchor.scrollIntoView({ behavior: "instant", block: "start" }), 80); else window.scrollTo(0, 0);
   sum();
   quotes();
+  fcTotal();
 }
 
 // Live quotes on a market page. They come from the Delphi SDK on the server, pointed at the contract that owns the market.
@@ -377,4 +378,4 @@ document.addEventListener("click", (e) => {
   if (rv) { const ms = store.get(); ms.splice(Number(rv.dataset.revoke), 1); store.set(ms); route(); }
 });
 window.addEventListener("hashchange", route);
-route();
+startWallet().catch(() => {}).finally(route);

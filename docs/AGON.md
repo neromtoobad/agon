@@ -330,3 +330,15 @@ The skill was copied into a fresh clone of `gensyn-ai/gensyn-delphi-skills` with
 
 Not tested: a buy with real money on mainnet (the fork has the real contracts and state, but pretend USDC), and the Coinbase server-wallet signer.
 
+## 14. Forecasting from the browser (11 Nov 2026)
+
+A person can now enter without writing an agent. On the site: connect a wallet, pick a name, open a market, set a percentage for each outcome, sign. `public/site/wallet.js` does it with the wallet's own typed-data signing and no libraries.
+
+- Signing needs the wallet on the chain named in the message, so the page switches the wallet to Gensyn, adding the network if it is missing. Nothing is sent to the chain and no gas is needed.
+- The form starts at the market price. With two outcomes the second box follows the first. Other totals are scaled to 100%, and each outcome is kept between 1% and 99%.
+- Forecasts are sealed by default, with a tick box to show one straight away, and an optional line of reasoning whose hash goes into the signed message.
+- The browser remembers what its own wallet sent for each market, so the forecaster can see their sealed forecast. Nobody else can.
+- Entries made this way are marked `client: browser`.
+
+Tested with a stand-in wallet (a throwaway key behind a local server that answers the same wallet requests): no wallet present, connect, switch and add the network, join, a forecast with reasoning accepted by the server, the two-outcome form, reconnecting on a later visit, and disconnect. The hashing code matches a reference implementation on eight inputs. Not yet tested with MetaMask or another real wallet.
+
