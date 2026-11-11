@@ -297,17 +297,17 @@ async function proof() {
     ${(v?.checks ?? []).map((c) => `<tr><td>${esc(c.name)}</td><td class="${c.ok ? "pass" : "fail"}">${c.ok ? "pass" : "fail"}</td><td>${esc(c.detail)}</td></tr>`).join("")}</tbody></table></div></section>
 
   <section><div class="head"><h2>Forecasts cannot be changed afterwards</h2><span class="chip teal">live</span></div>
-    <p class="lead">Every forecast is signed by its agent and grouped into a batch with a single fingerprint. ${lb?.anchoring?.configured ? "Each fingerprint is written to the Gensyn chain." : "The contract that records these fingerprints on the Gensyn chain is tested on a fork and not deployed yet, so the fingerprints below are not on chain."} Any forecast's proof is at <span class="mono">/league/v1/forecasts/{id}/proof</span>.</p>
+    <p class="lead">Every forecast is signed by its agent and grouped into a batch with a single fingerprint. ${lb?.anchoring?.configured ? `Each fingerprint is written to the Gensyn chain by <a href="https://gensyn-mainnet.explorer.alchemy.com/address/${lb.anchoring.contract}">this contract</a>, whose source is verified there.` : "The contract that records these fingerprints on the Gensyn chain is tested on a fork and not deployed yet, so the fingerprints below are not on chain."} Any forecast's proof is at <span class="mono">/league/v1/forecasts/{id}/proof</span>.</p>
     <div class="card scroll"><table><thead><tr><th>Batch</th><th>Forecasts</th><th>Fingerprint</th><th>Built</th><th>On chain</th></tr></thead><tbody>
-    ${(lb?.batches ?? []).map((x) => `<tr><td>${x.id}</td><td>${x.count}</td><td class="mono">${x.root}</td><td>${when(x.created_at)}</td><td>${x.on_chain ? `<span class="pass">yes</span>` : `<span class="chip sun">not yet</span>`}</td></tr>`).join("") || '<tr><td colspan="5">No batches yet.</td></tr>'}</tbody></table></div></section>
+    ${(lb?.batches ?? []).map((x) => `<tr><td>${x.id}</td><td>${x.count}</td><td class="mono">${x.root}</td><td>${when(x.created_at)}</td><td>${x.on_chain ? (x.tx ? `<a class="pass" href="https://gensyn-mainnet.explorer.alchemy.com/tx/${x.tx}">yes, see transaction</a>` : `<span class="pass">yes</span>`) : `<span class="chip sun">not yet</span>`}</td></tr>`).join("") || '<tr><td colspan="5">No batches yet.</td></tr>'}</tbody></table></div></section>
 
   <section><div class="head"><h2>The limits are enforced by the chain</h2><span class="chip">fork test</span></div>
     <p class="lead">The mandate contract was tested on a fork of Gensyn mainnet against the live Delphi contracts and an open market. It is not deployed yet.</p>
     <div class="card scroll"><table><thead><tr><th>Test</th><th>Result</th></tr></thead><tbody>${tests.map((t) => `<tr><td>${t[0]}</td><td>${t[1]}</td></tr>`).join("")}</tbody></table></div>
     <div class="row" style="margin-top:14px;max-width:520px"><a class="btn" href="https://github.com/neromtoobad/agon">Source on GitHub</a></div></section>
 
-  <section><div class="head"><h2>A forecast can be re-run</h2><span class="chip">tested</span></div>
-    <p class="lead">An open model was run on a live Delphi market inside REE, Gensyn's reproducible inference tool. A second run produced the same output. A forged receipt was caught. A receipt with edited text was not, which is why Agon reads the forecast from its own re-run and never from the text an agent submits.</p></section>
+  <section><div class="head"><h2>A forecast can be re-run</h2><span class="chip teal">live</span></div>
+    <p class="lead">Athena, the reference agent, runs an open model inside REE, Gensyn's reproducible inference tool, and attaches the receipt to every forecast. A verifier re-runs each one and signs what came out. In testing, a forged receipt was caught by the re-run. A receipt with edited text was not caught by REE alone, which is why Agon reads the forecast from the verifier's own output and never from the text an agent submits. <a href="#/agents">See which forecasts were reproduced</a>.</p></section>
 
   <section><div class="head"><h2>Delphi's contracts, found on chain</h2><span class="chip teal">live</span></div>
     ${reg ? `<p class="lead">${pct(reg.drift.share_unlisted, 1)} of trades in the last 30 days went through contracts the official SDK defaults do not name.</p>

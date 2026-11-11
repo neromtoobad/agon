@@ -1,7 +1,7 @@
 // The reference agent: an open model run locally in REE on the strict tier.
 // Every forecast it sends carries a receipt, so anyone can re-run it and get the same answer.
 //
-//   node scripts/reference-agent.ts [base URL] [--model Qwen/Qwen3-0.6B] [--limit 3] [--name Athena]
+//   node scripts/reference-agent.ts [base URL] [--model Qwen/Qwen3-0.6B] [--limit 3] [--name Athena] [--max-outcomes 6]
 //
 // It forecasts the fixtures that close soonest and that it has not forecast yet. It costs no model API spend.
 
@@ -14,6 +14,8 @@ const argv = process.argv.slice(2);
 const flag = (k: string, d: string) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : d; };
 const BASE = argv[0] && !argv[0].startsWith("--") ? argv[0] : "http://localhost:8787";
 const MODEL = flag("--model", "Qwen/Qwen3-0.6B"), LIMIT = Number(flag("--limit", "3")), NAME = flag("--name", "Athena");
+// A small model on a CPU writes a few tokens a second, so markets with long outcome lists are left out for now.
+const MAX_OUTCOMES = Number(flag("--max-outcomes", "6"));
 
 const account = wallet("agon-reference.json");
 const { domain, types } = await register(BASE, account, { name: NAME, client: "reference agent (REE, strict tier)", model: MODEL, uri: "https://github.com/neromtoobad/agon/blob/main/scripts/reference-agent.ts" });
@@ -22,8 +24,9 @@ console.log(`${NAME} ${account.address} · ${MODEL} · ${BASE}`);
 const { fixtures } = await get(BASE, "/league/v1/fixtures");
 const mine = await get(BASE, `/league/v1/agents/${account.address}?limit=500`);
 const done = new Set((mine.forecasts ?? []).map((f: any) => f.market));
-const targets = fixtures.filter((f: any) => !done.has(f.market)).slice(0, LIMIT);
-console.log(`${fixtures.length} open fixtures, ${done.size} already forecast, doing ${targets.length}`);
+const open = fixtures.filter((f: any) => !done.has(f.market)), fits = open.filter((f: any) => f.outcomes.length <= MAX_OUTCOMES);
+const targets = fits.slice(0, LIMIT);
+console.log(`${fixtures.length} open fixtures, ${done.size} already forecast, ${open.length - fits.length} skipped for having more than ${MAX_OUTCOMES} outcomes, doing ${targets.length}`);
 
 const work = join(CACHE, "work", "reference");
 mkdirSync(work, { recursive: true });
@@ -33,7 +36,7 @@ for (const fx of targets) {
   const file = join(work, `${fx.market}.jsonl`);
   writeFileSync(file, JSON.stringify({ prompt }) + "\n");
   const started = Date.now();
-  const run = ree(["run-all", "--tasks-root", inside(join(CACHE, "gensyn")), "--model-name", MODEL, "--prompt-file", inside(file), "--max-new-tokens", "48", "--no-do-sample", "--cpu-only"]);
+  const run = ree(["run-all", "--tasks-root", inside(join(CACHE, "gensyn")), "--model-name", MODEL, "--prompt-file", inside(file), "--max-new-tokens", String(Math.max(48, 24 + 14 * fx.outcomes.length)), "--no-do-sample", "--cpu-only"]);
   const found = run.code === 0 ? newestReceipt(join(CACHE, "gensyn"), started) : null, receipt = found?.json;
   const secs = Math.round((Date.now() - started) / 1000);
   if (!receipt) { console.log(`✗ ${fx.question.slice(0, 60)} — REE failed (exit ${run.code}) after ${secs}s`); continue; }

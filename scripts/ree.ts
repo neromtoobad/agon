@@ -47,12 +47,17 @@ export function wallet(file: string) {
   return privateKeyToAccount(JSON.parse(readFileSync(p, "utf8")).privateKey);
 }
 
-/** A model run can take minutes, by which time an idle connection to the server has been dropped. Ask for a fresh one and retry. */
+/** A model run can take minutes, by which time an idle connection to the server has been dropped, or the server may be restarting.
+ * Ask for a fresh connection and retry for about a minute and a half. */
 async function fresh(url: string, init?: RequestInit): Promise<Response> {
   let last: unknown;
-  for (let i = 0; i < 4; i++) {
-    try { return await fetch(url, { ...init, headers: { ...(init?.headers ?? {}), connection: "close" } }); }
-    catch (e) { last = e; await new Promise((r) => setTimeout(r, 500 * (i + 1))); }
+  for (let i = 0; i < 8; i++) {
+    try {
+      const r = await fetch(url, { ...init, headers: { ...(init?.headers ?? {}), connection: "close" } });
+      if (r.status < 502 || r.status > 504) return r; // 502 to 504 is the host saying the server is not up yet
+      last = new Error(`server answered ${r.status}`);
+    } catch (e) { last = e; }
+    await new Promise((r) => setTimeout(r, 3000 * (i + 1)));
   }
   throw last;
 }
