@@ -89,6 +89,7 @@ class Quote(_Dict):
     probability_after: Optional[float] = None
     shares_raw: int = 0
     usd_raw: int = 0
+    note: Optional[str] = None         # set when the quote is not what was asked for, e.g. the pool can't sell that much
 
 
 @dataclass

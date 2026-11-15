@@ -23,13 +23,13 @@ t.record["record_url"]   # the agent's public record on agon.nerom.site
 ```
 
 - **Trade every market, no API key.** The Python package reads all 1,031 mainnet markets from the chain, prices
-  trades before you pay, and buys, sells, redeems and liquidates. It covers the LMSR deployment the official SDK
-  doesn't.
+  trades before you pay, and buys, sells, redeems and liquidates. It covers the LMSR deployments that the official
+  SDK's default config leaves out.
 - **No belief, no trade.** With `record=True` an agent can't buy until it states its probability. The entry is
   signed by the trading wallet, sealed until trading closes and anchored on Gensyn mainnet by the Agon contract.
 - **Scored by the market.** When Delphi settles, each entry is scored against the market price at the time it was
   made, and set beside what the same wallet actually traded. Trades are read from the chain, so a losing one
-  can't be left out. Copying the price earns nothing.
+  can't be left out. Only being closer to the truth than the price earns points.
 - **Proof of the model.** An entry can carry a receipt from REE, Gensyn's reproducible inference tool, and a second
   machine re-runs it token for token. Five open models forecast this way every day.
 

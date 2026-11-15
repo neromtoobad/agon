@@ -30,8 +30,9 @@ $ agon quote 0x4F5DC6b636c226CeC0C2403f988f24431b9Cc463 Yes --usd 5
 buy 7.7223 Yes shares costs $4.9996 (avg 0.6474); probability 50.4% → 75.3%
 ```
 
-Most Delphi pools hold $10–$50, so a $5 trade can move the price 25 points. Every quote shows the probability
-after your trade so you see that before you pay.
+Most Delphi pools hold $10–$50, so a $5 trade can move the price 25 points. On LMSR markets (most open ones) a
+quote shows the probability after your trade, so you see that before you pay. If a budget is more than the pool
+can sell, the quote says so and shows the most it can.
 
 `agon market <address>` prints the rules the AI judge will apply and the sources it will read. It also checks
 that the rules file matches the hash stored on chain.
@@ -64,7 +65,8 @@ agon record            # your record so far; `agon record 0x…` shows anyone's
 
 - **No entry, no trade.** A buy without a belief is refused, and so is one whose entry can't be logged.
   `record="try"` trades anyway and says why the entry is missing.
-- **When it's logged.** The entry is sent after the trade has been simulated, so failed buys never leave entries.
+- **When it's logged.** The entry is sent after the trade has been simulated and just before it is sent, so a buy
+  that would fail leaves no entry.
 - **What it covers.** Mainnet markets whose trading window was at least 12 hours long; shorter ones are refused.
 - **Which server.** Entries go to https://agon.nerom.site. The server is in this repo; point `recorder_url`
   or `AGON_URL` at your own instance if you run one.
@@ -79,7 +81,7 @@ agon record            # your record so far; `agon record 0x…` shows anyone's
 from agon import Delphi
 
 d = Delphi()                                   # mainnet, read-only
-for m in d.search("election", limit=5):
+for m in d.search("bitcoin", limit=5):
     print(m.summary())
 
 m = d.market("0x4F5DC6b636c226CeC0C2403f988f24431b9Cc463")
@@ -89,7 +91,7 @@ q = d.quote_buy(m, "Yes", usd=2)               # shares, average price, probabil
 print(q.shares, q.average_price, q.probability_after)
 
 d = Delphi(private_key="0x...")                # or set AGON_PRIVATE_KEY
-t = d.buy(m, "Yes", usd=2, max_slippage=0.02)  # approves only what this trade needs
+t = d.buy(m, "Yes", usd=2)                     # never spends more than usd; approves only what this trade needs
 d.sell(m, "Yes")                               # everything you hold in that outcome
 
 for p in d.positions():                        # every market, with what to do next
@@ -116,7 +118,8 @@ Money comes back as USD floats and shares as decimal numbers; every object has `
 | `agon watch …` | alerts, see below |
 
 Add `--json` to any command for machine output, and `--network testnet` or `--network competition-testnet` to
-leave mainnet.
+leave mainnet. Rules files and the list of markets that can no longer change are cached in `~/.cache/agon`
+(set `AGON_CACHE` to move it), which is why a second run is faster than the first.
 
 ## MCP server: let an agent trade, with limits
 
@@ -156,7 +159,7 @@ sending anything. With trading on, every buy is checked first:
 | `AGON_MAX_TRADE_USD` | 5 per trade |
 | `AGON_MAX_DAILY_USD` | 20 per UTC day, kept in a ledger file so a restart doesn't reset it |
 | `AGON_MAX_SLIPPAGE` | 0.03 |
-| `AGON_ALLOWED_MARKETS` | all (comma list of addresses to restrict) |
+| `AGON_ALLOWED_MARKETS` | all (comma list of addresses the agent may buy in) |
 
 Use a separate wallet for the agent and only put in what you're willing to lose.
 
@@ -182,13 +185,14 @@ The first run records a baseline, and alerts start from the second check.
 
 [`@gensyn-ai/gensyn-delphi-sdk`](https://www.npmjs.com/package/@gensyn-ai/gensyn-delphi-sdk) 2.1.0 is TypeScript
 only. Its mainnet config has the two DPM deployments but **not the LMSR one**, and LMSR is where most open markets
-are (56 of 82 when this was written). LMSR quote functions also return three values where DPM returns one. Full
+are (56 of 82 when this was written). The SDK can reach those markets if you find and pass the gateway and factory
+addresses yourself. LMSR quote functions also return three values where DPM returns one. Full
 notes are in [docs/contracts.md](https://github.com/neromtoobad/agon/blob/main/python/docs/contracts.md).
 
 | | SDK 2.1.0 | Agon for Python |
 |---|---|---|
 | Language | TypeScript | Python |
-| Mainnet LMSR markets | no | yes |
+| Mainnet LMSR markets | not in its default config (you must pass the gateway and factory yourself) | yes |
 | List markets and positions without an API key | no (REST API needs a key) | yes, from chain |
 | Keyword search | no (category filter only) | yes |
 | Rules-file hash check | no | yes |

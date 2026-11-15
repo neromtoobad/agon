@@ -117,6 +117,19 @@ def test_fit_budget_never_overspends_and_gets_close(usd):
     assert stub._quote_raw(m, 0, raw, "buy") == spent
 
 
+def test_fit_budget_stops_at_what_the_pool_can_sell():
+    stub = _lmsr_stub()
+    priced = stub._quote_raw
+    def capped(m, idx, raw, side):  # the pool refuses anything above 30 shares
+        if raw > 30 * 10**18:
+            raise RuntimeError("too many shares")
+        return priced(m, idx, raw, side)
+    stub._quote_raw = capped
+    raw, spent = Delphi._fit_budget(stub, _m("0xa", "q"), 0, int(100_000 * 1e6))
+    assert 29.9 * 10**18 <= raw <= 30 * 10**18
+    assert spent == priced(_m("0xa", "q"), 0, raw, "buy") < 100_000 * 1e6
+
+
 def test_fit_budget_too_small():
     stub = SimpleNamespace(network=SimpleNamespace(token_decimals=6), _quote_raw=lambda *a: 10**9)
     with pytest.raises(DelphiError, match="too small"):

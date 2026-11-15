@@ -7,4 +7,4 @@ from .networks import NETWORKS, Deployment, Network
 
 __all__ = ["Delphi", "DelphiError", "InsufficientFunds", "Market", "Position", "Quote", "Trade",
            "NETWORKS", "Network", "Deployment"]
-__version__ = "0.3.1"
+__version__ = "0.3.2"

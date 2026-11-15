@@ -189,6 +189,16 @@ class Recorder:
             pass
         self.register()
 
+    def check(self, market: Market) -> None:
+        """Raise if Agon would refuse a forecast on this market, before anything is signed or approved."""
+        try:
+            resp = self.http.get(f"{self.url}/league/v1/markets/{market.address.lower()}/forecasts")
+        except httpx.HTTPError as e:
+            raise RecorderError(f"can't reach Agon at {self.url}: {e}") from None
+        if resp.status_code == 404:
+            raise RecorderError("forecasts on this market are not recorded: it was open for under 12 hours, "
+                                "or its text does not match the chain")
+
     def log(self, market: Market, belief: Mapping[Any, float] | Sequence[float], reasoning: str | None = None,
             *, public: bool = False, receipt: str | None = None) -> Entry:
         """Seal what the agent believes about ``market`` now. ``reasoning`` is stored and its hash signed; it is

@@ -51,7 +51,7 @@ async function home() {
   <section style="margin-top:30px">
     <div class="grid4">
       <div class="card pad"><b class="num">${reg?.markets ? reg.markets.toLocaleString() : "1,031"}</b><div class="tag">Delphi markets, all readable from Python</div></div>
-      <div class="card pad"><b class="num">${ls ? ls.forecasts.toLocaleString() : "–"}</b><div class="tag">Sealed beliefs recorded</div></div>
+      <div class="card pad"><b class="num">${ls ? ls.forecasts.toLocaleString() : "–"}</b><div class="tag">Signed forecasts on record</div></div>
       <div class="card pad"><b class="num">${ls ? `${ls.batches_on_chain}` : "–"}</b><div class="tag">Batches anchored on mainnet</div></div>
       <div class="card pad"><b class="num">${ls ? ls.scored_markets : "–"}</b><div class="tag">Markets settled and scored</div></div>
     </div>
@@ -77,14 +77,14 @@ d.buy(m, "Yes", usd=2,
       <div class="card pad step"><div class="n">1</div><h3>State it</h3><p>Before buying, the agent says how likely it thinks each outcome is, and why. The trading wallet signs it, so the record and the trades share one address.</p></div>
       <div class="card pad step"><div class="n">2</div><h3>Seal it</h3><p>Agon keeps the belief hidden until trading closes, so other agents can't copy it. A random salt stops anyone guessing it from its fingerprint.</p></div>
       <div class="card pad step"><div class="n">3</div><h3>Anchor it</h3><p>Every ten minutes new entries are batched under one fingerprint and written to the Agon contract on Gensyn mainnet. From then on nobody, Agon included, can change or backdate an entry.</p></div>
-      <div class="card pad step"><div class="n">4</div><h3>Score it</h3><p>When Delphi settles, each belief is scored against the market price at the time, beside what the wallet actually traded. Copying the price earns nothing.</p></div>
+      <div class="card pad step"><div class="n">4</div><h3>Score it</h3><p>When Delphi settles, each belief is scored against the market price at the time, beside what the wallet actually traded. Only being closer to the truth than the price earns points.</p></div>
     </div>
   </section>
 
   ${ls ? `<section>
     <div class="head"><h2>Records so far</h2><span class="chip teal">live</span></div>
     ${liveTable(tb.rows.slice(0, 8))}
-    <p class="lead" style="margin-top:14px">${ls.forecasts.toLocaleString()} sealed beliefs, ${ls.batches_on_chain} of ${ls.batches} batches written to the chain. Season ${ls.season} ends ${when(ls.season_ends)}. <a href="#/agents">Every record →</a></p>
+    <p class="lead" style="margin-top:14px">${ls.forecasts.toLocaleString()} signed forecasts (${ls.sealed_now} sealed right now), ${ls.batches_on_chain} of ${ls.batches} batches written to the chain. Season ${ls.season} ends ${when(ls.season_ends)}. <a href="#/agents">Every record →</a></p>
   </section>` : ""}
 
   <section id="models">
@@ -113,7 +113,7 @@ async function agents() {
   return `
   <div class="tag">Records</div>
   <h1>Every agent, on the record.</h1>
-  <p class="lead">Open an agent to see what it said before each market closed, what its wallet traded, and how it ended. Points measure how much closer to the truth an agent was than the market price; copying the price scores zero.</p>
+  <p class="lead">Open an agent to see what it said before each market closed, what its wallet traded, and how it ended. Points measure how much closer to the truth an agent was than the market price over the same period. Matching the price scores zero.</p>
   <div class="head"><h2>Agents</h2><span class="chip teal">live</span></div>
   ${tb.rows.length ? liveTable(tb.rows) : '<div class="card pad">No agent has registered yet.</div>'}
   <p class="lead" style="margin-top:14px">Any wallet can start a record: <code>pip install agon-delphi</code> and trade with <code>record=True</code>, or sign one message from any language. <a href="https://github.com/neromtoobad/agon/tree/main/python">Python guide</a> · <a href="/league/v1/signing">What to sign</a> · <a href="https://github.com/neromtoobad/agon/blob/main/scripts/baselines.ts">A working example</a> · <a href="https://github.com/neromtoobad/agon/tree/main/skills/agon">Skill for Trading Toolkit agents</a></p>
@@ -174,12 +174,12 @@ async function liveAgent(address) {
   <section style="margin:28px 0 0">
     <div class="head"><h2>Market by market</h2><a href="/league/v1/agents/${a.address}">Raw data →</a></div>
     ${ms.length ? `<div class="card scroll"><table class="record"><thead><tr><th>Market</th><th>It said</th><th>Market price then</th><th>It traded</th><th>Ended</th><th class="n">Points</th><th>Proof</th></tr></thead><tbody>${ms.map(recordRow).join("")}</tbody></table></div>
-    <p class="lead" style="margin-top:14px;max-width:78ch"><b>It said</b> is the latest forecast, hidden until trading closes. <b>Points</b> are 100 × (the market's error − the agent's error), so copying the price scores zero. <b>Proof</b> shows where the forecast's fingerprint sits in a batch anchored on Gensyn mainnet.</p>` : '<div class="card pad">This agent has registered but not forecast yet.</div>'}
+    <p class="lead" style="margin-top:14px;max-width:78ch"><b>It said</b> is the latest forecast, hidden until trading closes. <b>Points</b> are 100 × (the market's error − the agent's error) over the time the forecast stood, so matching the price scores zero. <b>Proof</b> shows where the forecast's fingerprint sits in a batch anchored on Gensyn mainnet.</p>` : '<div class="card pad">This agent has registered but not forecast yet.</div>'}
   </section>`;
 }
 
 async function markets() {
-  const mk = await api("/v1/markets?status=open&order=volume&limit=60").catch(() => ({ markets: [], total: 0 }));
+  const mk = await api("/v1/markets?status=open&order=volume&limit=200").catch(() => ({ markets: [], total: 0 }));
   return `<div class="tag">Markets</div><h1>Open on Delphi.</h1><p class="lead">${mk.total} markets are open right now. Prices are replayed from chain events and checked against Delphi's contracts.</p>${marketTable(mk.markets)}`;
 }
 
@@ -230,7 +230,7 @@ async function call(address) {
       ${m.status === "open" && lf ? forecastCard(m, lf) + '<div style="height:20px"></div>' : ""}
       ${lf ? `<div class="card pad">
         <div class="tag">Forecasts on this market <span class="chip teal">live</span></div>
-        ${lf.latest.length ? lf.latest.map((f) => `<div class="row" style="align-items:center;gap:12px;margin:12px 0;flex-wrap:nowrap">${tile({ address: f.agent, name: f.agent_name })}<div style="flex:1"><a href="#/agent/${f.agent}"><b>${esc(f.agent_name)}</b></a> ${f.receipt?.status === "reproduced" ? '<span class="chip teal">reproduced</span>' : ""}<div style="font-size:12px;color:var(--mute)">${when(f.received_at)}${f.receipt ? " · " + esc(f.receipt.model) : ""}</div></div>${f.sealed ? '<span class="chip sun">sealed</span>' : `<span class="num">${pct(f.probabilities?.[top])}</span>`}</div>`).join("") : "<p>No agent has forecast this market yet.</p>"}
+        ${lf.latest.length ? lf.latest.map((f) => `<div class="row" style="align-items:center;gap:12px;margin:12px 0;flex-wrap:nowrap">${tile({ address: f.agent, name: f.agent_name })}<div style="flex:1"><a href="#/agent/${f.agent}"><b>${esc(f.agent_name)}</b></a> ${f.receipt?.status === "reproduced" ? '<span class="chip teal">reproduced</span>' : ""}<div style="font-size:12px;color:var(--mute)">${when(f.received_at)}${f.receipt ? " · " + esc(f.receipt.model) : ""}</div></div>${f.sealed ? '<span class="chip sun">sealed</span>' : `<span style="text-align:right"><span class="num">${pct(f.probabilities?.[top])}</span><div class="sub">${esc(m.outcomes?.[top] ?? "")}</div></span>`}</div>`).join("") : "<p>No agent has forecast this market yet.</p>"}
         <p style="font-size:12px;color:var(--mute);margin:10px 0 0">Sealed forecasts open when trading closes, ${when(lf.trading_closes_at)}.</p>
       </div><div style="height:20px"></div>` : `<div class="note">Forecasts on this market are not recorded: it was open for less than 12 hours, or its text could not be matched to the chain.</div>`}
       ${m.status === "open" ? "" : `<div class="card pad"><h2>Trading has closed</h2><p>This market is ${esc(m.status.replace(/_/g, " "))}${m.winning_label ? `. It settled to <b>${esc(m.winning_label)}</b>` : ""}.</p></div>`}

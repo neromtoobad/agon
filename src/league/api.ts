@@ -42,6 +42,7 @@ function recordOf(a: string, fs: any[], scores: any[]) {
     };
   });
   const buys = evs.filter((e) => e.kind === "buy");
+  const cover = scores.reduce((n, s) => n + s.coverage, 0);
   const closed = [...ledger.values()].filter((w) => w.closed && w.pnl != null);
   return {
     summary: {
@@ -51,8 +52,9 @@ function recordOf(a: string, fs: any[], scores: any[]) {
       buys_with_belief: buys.filter((e) => firstSaid.has(e.market) && (e.ts == null || e.ts >= firstSaid.get(e.market)!)).length,
       traded_markets: ledger.size, spent_usd: r6([...ledger.values()].reduce((n, w) => n + w.cost, 0)),
       realized_pnl_usd: closed.length ? r6(closed.reduce((n, w) => n + w.pnl, 0)) : null,
-      agent_brier: scores.length ? r6(scores.reduce((n, s) => n + s.agent_brier, 0) / scores.length) : null,
-      market_brier: scores.length ? r6(scores.reduce((n, s) => n + s.market_brier, 0) / scores.length) : null,
+      // Weighted by coverage, the same weight the points use, so these two numbers and the points always agree in sign.
+      agent_brier: cover > 0 ? r6(scores.reduce((n, s) => n + s.agent_brier * s.coverage, 0) / cover) : null,
+      market_brier: cover > 0 ? r6(scores.reduce((n, s) => n + s.market_brier * s.coverage, 0) / cover) : null,
     },
     markets,
   };

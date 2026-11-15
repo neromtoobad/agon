@@ -27,6 +27,9 @@ SHARE = 10**18
 MAX_UINT = 2**256 - 1
 
 
+FINAL_STATUSES = ("settled", "expired", "failed")
+
+
 class DelphiError(Exception):
     pass
 
@@ -121,6 +124,14 @@ class Delphi:
     def market_addresses(self, deployment: str | None = None) -> list[str]:
         """Every market ever created, newest first, straight from the factories."""
         names = [deployment] if deployment else list(self._dep)
+        # market lists only ever grow, so the ones already seen are kept on disk and only new ones are fetched
+        path = _cache_dir() / f"markets-{self.network.name}-{self.network.chain_id}.json" if self.cache else None
+        if path and not self._addresses and path.exists():
+            try:
+                self._addresses = {k: list(v) for k, v in json.loads(path.read_text()).items() if k in self._dep}
+            except (ValueError, OSError):
+                self._addresses = {}
+        before = sum(len(v) for v in self._addresses.values())
         totals = self.reader.run([Call(self._fac[n], "getTotalMarketProxiesCount") for n in names])
         out: list[str] = []
         for name, total in zip(names, totals):
@@ -136,6 +147,11 @@ class Delphi:
             for a in have:
                 self._where[a.lower()] = name
             out.extend(have)
+        if path and sum(len(v) for v in self._addresses.values()) > before:
+            try:
+                path.write_text(json.dumps(self._addresses))
+            except OSError:
+                pass
         return list(reversed(out))
 
     def markets(self, status: str | Iterable[str] | None = "open", *, deployment: str | None = None,
@@ -146,8 +162,7 @@ class Delphi:
         if wanted and not wanted <= set(STATUSES):
             raise ValueError(f"status must be among {STATUSES}")
         addrs = self.market_addresses(deployment)
-        status_calls = [Call(self._gw[self._where[a.lower()]], "marketStatus", [a]) for a in addrs]
-        statuses = self.reader.run(status_calls)
+        statuses = self._statuses(addrs)
         chosen = [a for a, s in zip(addrs, statuses)
                   if not isinstance(s, Exception) and (wanted is None or STATUSES[s] in wanted)]
         if limit and not (wanted == {"open"}):
@@ -157,7 +172,31 @@ class Delphi:
             found.sort(key=lambda m: m.trading_closes_at.timestamp() if m.trading_closes_at else math.inf)
         return found[:limit] if limit else found
 
+    def _statuses(self, addrs: list[str]) -> list:
+        """marketStatus for each address. Settled, expired and failed are final, so they are remembered on disk and
+        only markets that can still change are asked about again."""
+        path = _cache_dir() / f"status-{self.network.name}-{self.network.chain_id}.json" if self.cache else None
+        final: dict[str, int] = {}
+        if path and path.exists():
+            try:
+                final = {k: int(v) for k, v in json.loads(path.read_text()).items()}
+            except (ValueError, OSError):
+                final = {}
+        ask = [a for a in addrs if a.lower() not in final]
+        live = dict(zip((a.lower() for a in ask),
+                        self.reader.run([Call(self._gw[self._where[a.lower()]], "marketStatus", [a]) for a in ask])))
+        fresh = {a: s for a, s in live.items() if isinstance(s, int) and STATUSES[s] in FINAL_STATUSES}
+        if path and fresh:
+            final.update(fresh)
+            try:
+                path.write_text(json.dumps(final))
+            except OSError:
+                pass
+        return [final.get(a.lower(), live.get(a.lower(), Exception("unknown"))) for a in addrs]
+
     def market(self, address: str, *, with_rules: bool = True) -> Market:
+        if not Web3.is_address(address):
+            raise DelphiError(f"{address!r} is not a market address")
         self._deployment(address)
         return self._load([checksum(address)], with_rules=with_rules)[0]
 
@@ -287,37 +326,58 @@ class Delphi:
         unit = 10**self.network.token_decimals
         if shares is not None:
             raw = int(round(shares * SHARE))
-            cost = self._quote_raw(m, idx, raw, "buy")
-        else:
-            raw, cost = self._fit_budget(m, idx, int(usd * unit))
-        return self._quote(m, idx, "buy", raw, cost)
-
-    def _fit_budget(self, m: Market, idx: int, budget: int) -> tuple[int, int]:
-        """Largest share count whose cost is within budget. Cost is convex in shares, so walk in from both sides."""
-        p = m.prices[idx] if m.prices and m.prices[idx] > 0 else 0.5
-        guess = budget / (10**self.network.token_decimals) / p
-        lo: tuple[float, int] | None = None
-        hi: tuple[float, int] | None = None
-        for _ in range(10):
-            raw = int(guess * SHARE)
+            if raw <= 0:
+                raise ValueError("shares must be more than zero")
             try:
                 cost = self._quote_raw(m, idx, raw, "buy")
-            except Exception:  # noqa: BLE001  (too many shares for the pool)
-                cost = None
-            if cost is not None and cost <= budget:
-                if not lo or guess > lo[0]:
-                    lo = (guess, cost)
-            elif not hi or guess < hi[0]:
-                hi = (guess, cost if cost is not None else budget * 4)
-            if cost and abs(cost - budget) / budget < 0.002 and cost <= budget:
-                break
-            if lo and hi:
-                if (hi[0] - lo[0]) / hi[0] < 0.001:
+            except Exception:  # noqa: BLE001
+                raise DelphiError(f"this market can't sell {shares:g} shares of that outcome: it is more than its pool "
+                                  "can price. Try fewer, or quote with usd= to see the most a budget buys") from None
+        else:
+            if usd <= 0:
+                raise ValueError("usd must be more than zero")
+            raw, cost = self._fit_budget(m, idx, int(usd * unit))
+        q = self._quote(m, idx, "buy", raw, cost)
+        if usd is not None and cost < usd * unit * 0.95:
+            q.note = f"this is the most the pool can sell right now; ${usd:,.2f} would not all be spent"
+        return q
+
+    def _fit_budget(self, m: Market, idx: int, budget: int) -> tuple[int, int]:
+        """Largest share count whose cost is within budget. Cost rises with shares, so bracket the answer and close in.
+        If the pool can't price a size at all, the answer is the largest size it can, which may cost less than budget."""
+        def cost_of(shares: float) -> int | None:
+            try:
+                return self._quote_raw(m, idx, int(shares * SHARE), "buy")
+            except Exception:  # noqa: BLE001  (more shares than the pool can price)
+                return None
+
+        p = m.prices[idx] if m.prices and m.prices[idx] > 0 else 0.5
+        guess = budget / (10**self.network.token_decimals) / p
+        lo: tuple[float, int] | None = None            # largest size known to fit: (shares, cost)
+        hi: tuple[float, int | None] | None = None     # smallest size known not to fit; cost None = can't be priced
+        for _ in range(60):
+            c = cost_of(guess)
+            if c is not None and c <= budget:
+                lo = (guess, c)
+                if c >= budget * 0.998:
                     break
-                guess = lo[0] + (hi[0] - lo[0]) * (budget - lo[1]) / max(1, hi[1] - lo[1])
-                guess = min(max(guess, lo[0] * 1.0001), hi[0] * 0.9999)
+                if hi is None:
+                    guess *= max(1.05, min(4.0, budget / max(c, 1)))
+                    continue
             else:
-                guess *= max(0.25, min(4, budget / cost)) if cost else 0.5
+                hi = (guess, c)
+                if lo is None:
+                    guess *= max(0.25, min(0.9, budget / c)) if c else 0.5
+                    if guess * SHARE < 1:
+                        break
+                    continue
+            if (hi[0] - lo[0]) / hi[0] < 0.0005:
+                break
+            if hi[1] is not None and hi[1] > lo[1]:   # both priced: aim where the line between them meets the budget
+                guess = lo[0] + (hi[0] - lo[0]) * (budget - lo[1]) / (hi[1] - lo[1])
+                guess = min(max(guess, lo[0] + (hi[0] - lo[0]) * 0.02), hi[0] - (hi[0] - lo[0]) * 0.02)
+            else:
+                guess = (lo[0] + hi[0]) / 2
         if not lo:
             raise DelphiError("the budget is too small to buy any shares")
         return int(lo[0] * SHARE), lo[1]
@@ -350,7 +410,7 @@ class Delphi:
 
     def _need_account(self):
         if not self.account:
-            raise DelphiError("no wallet: pass private_key= or set AGON_PRIVATE_KEY")
+            raise DelphiError("no wallet key: set AGON_PRIVATE_KEY (or pass private_key= in code)")
         return self.account
 
     def _send(self, fn) -> dict:
@@ -393,9 +453,16 @@ class Delphi:
         if self.recorder and belief is None:
             raise DelphiError('recording is on: say what you believe, e.g. belief={"Yes": 0.7}')
         if self.recorder:
-            from .recorder import belief_vector
+            from .recorder import RecorderError, belief_vector
             belief_vector(m, belief)  # bad beliefs fail here, before any approval is sent
+            if self.record_mode != "try":
+                try:
+                    self.recorder.check(m)  # and so do markets Agon doesn't record
+                except RecorderError as err:
+                    raise DelphiError(f"not traded: the belief could not be recorded ({err})") from None
         max_in = math.ceil(q.usd_raw * (1 + max_slippage))
+        if usd is not None:  # a dollar budget is a ceiling: if the price moves past it the buy reverts, it never overspends
+            max_in = min(max_in, int(usd * 10**self.network.token_decimals))
         have = self.token.functions.balanceOf(acct.address).call()
         if have < max_in:
             raise InsufficientFunds(f"need up to ${max_in / 10**self.network.token_decimals:.2f}, wallet has ${have / 10**self.network.token_decimals:.2f}")
@@ -403,8 +470,7 @@ class Delphi:
         approval = self._ensure_allowance(m.address, max_in, approve_unlimited)
         fn = self._gw[m.deployment].functions.buyExactOut(checksum(m.address), idx, q.shares_raw, max_in)
         sim = fn.call({"from": acct.address})
-        # log the belief last, once the trade is known to go through, so the record never has entries for trades
-        # that failed before sending
+        # log the belief last, once the trade is known to go through, so a buy that would fail leaves no entry
         rec = self._log_belief(m, idx, belief, reasoning, receipt) if self.recorder else None
         r = self._send(fn)
         paid = int(sim[0] if isinstance(sim, (list, tuple)) else sim)

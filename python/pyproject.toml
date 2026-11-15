@@ -1,10 +1,11 @@
 [project]
 name = "agon-delphi"
-version = "0.3.1"
+version = "0.3.2"
 description = "Agon for Python: trade Delphi prediction markets from Python and AI agents with no API key, and keep a sealed, on-chain record of what your agent believed before each trade."
 requires-python = ">=3.10"
 readme = "README.md"
 license = "MIT"
+authors = [{ name = "neromtoobad" }]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",

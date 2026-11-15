@@ -12,7 +12,10 @@ import os
 from typing import Any, Optional
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
+
+from . import __version__
 
 from .client import Delphi, DelphiError
 from .limits import Guard, LimitExceeded, Limits
@@ -28,7 +31,7 @@ state what you actually believe, not what justifies the trade."""
 READ = ToolAnnotations(read_only_hint=True, open_world_hint=True)
 WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True)
 
-server = MCPServer(name="agon", instructions=INSTRUCTIONS)
+server = MCPServer(name="agon", instructions=INSTRUCTIONS, version=__version__)
 _client: Optional[Delphi] = None
 _guard: Optional[Guard] = None
 
@@ -60,7 +63,8 @@ def _brief(m) -> dict:
 
 
 def _fail(e: Exception) -> dict:
-    return {"error": str(e)}
+    """Report a failure as a tool error, so the client and the model both see that the call did not work."""
+    raise ToolError(str(e)) from None
 
 
 @server.tool(annotations=READ)

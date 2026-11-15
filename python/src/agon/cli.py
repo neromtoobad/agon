@@ -19,7 +19,8 @@ def _out(obj, as_json: bool) -> None:
 def _market_line(m) -> str:
     odds = "  ".join(f"{o} {p:.0%}" for o, p in zip(m.outcomes, m.probabilities))
     close = m.trading_closes_at.strftime("%b %d %H:%M") if m.trading_closes_at else "?"
-    return f"{m.address}  {close:>12}  ${m.pool_usd or 0:>7.2f}  {odds}\n    {m.question}"
+    won = f"  → {m.outcomes[m.winning_outcome]} won" if m.status == "settled" and m.winning_outcome is not None and m.winning_outcome < len(m.outcomes) else ""
+    return f"{m.address}  {close:>12}  ${m.pool_usd or 0:>7.2f}  {odds}{won}\n    {m.question}"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -27,6 +28,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--network", default=None, help="mainnet (default), testnet or competition-testnet")
     p.add_argument("--json", action="store_true", help="print JSON")
     sub = p.add_subparsers(dest="cmd", required=True)
+    # --json and --network work before or after the command
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--network", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    common.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    _add = sub.add_parser
+    sub.add_parser = lambda *a_, **k_: _add(*a_, parents=[common], **k_)  # type: ignore[method-assign]
 
     s = sub.add_parser("markets", help="list markets with live odds")
     s.add_argument("--status", default="open", help="open | awaiting_settlement | settled | expired | failed | all")
@@ -91,8 +98,8 @@ def main(argv: list[str] | None = None) -> int:
     a = p.parse_args(argv)
     import os
     record = getattr(a, "record", False) or os.environ.get("AGON_RECORD", "").lower() in ("1", "true", "yes")
-    d = Delphi(a.network or os.environ.get("AGON_NETWORK", "mainnet"), record=record if a.cmd == "buy" else False)
     try:
+        d = Delphi(a.network or os.environ.get("AGON_NETWORK", "mainnet"), record=record if a.cmd == "buy" else False)
         return _run(d, a)
     except (DelphiError, ValueError, RecorderError) as e:
         print(f"error: {e}", file=sys.stderr)
@@ -114,7 +121,8 @@ def _run(d: Delphi, a) -> int:
         else:
             for m in ms:
                 print(_market_line(m))
-            print(f"\n{len(ms)} market(s)")
+            more = f" (the first {a.limit}; raise --limit to see more)" if a.cmd == "markets" and a.limit and len(ms) == a.limit else ""
+            print(f"\n{len(ms)} market(s){more}")
         return 0
     if a.cmd == "market":
         m = d.market(a.address)
@@ -141,6 +149,8 @@ def _run(d: Delphi, a) -> int:
             verb = "costs" if q.side == "buy" else "returns"
             print(f"{q.side} {q.shares:.4f} {q.outcome_label} shares {verb} ${q.usd:.4f} "
                   f"(avg {q.average_price:.4f}); probability {q.probability_before:.1%}{after}")
+            if q.note:
+                print(f"note: {q.note}")
         return 0
     if a.cmd == "buy":
         q = d.quote_buy(a.address, a.outcome, usd=a.usd)
