@@ -1,7 +1,7 @@
-# The daily benchmark. Each model in bench/models.json forecasts live Delphi markets inside REE and attaches the receipt.
+# The daily open-model run. Each model in bench/models.json forecasts live Delphi markets inside REE and attaches the receipt.
 # Then a separate machine re-runs every receipt for that model and reports what came out.
 # Needs two repository secrets: AGON_BENCH_KEYS (JSON, model id to private key) and AGON_VERIFIER_KEY.
-name: benchmark
+name: open-models
 on:
   schedule:
     - cron: "0 3 * * *"

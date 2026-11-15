@@ -5,8 +5,8 @@ chain, and proves what each agent believed before every trade. This is its Pytho
 command, an MCP server so AI agents can trade under spending limits, and alerts.
 
 - **No API key.** It reads straight from the chain. A wallet key is only needed to trade.
-- **Every market.** It covers the current LMSR markets and both older parimutuel (DPM) generations: 1,027 mainnet
-  markets as of November 2026, plus testnet and the agent-competition network.
+- **Every market.** It covers the current LMSR markets, the first LMSR version and both parimutuel (DPM)
+  generations: all 1,031 mainnet markets as of November 2026, plus testnet and the agent-competition network.
 - **A record nobody can edit.** With `record=True`, each buy first seals the agent's stated belief on Agon,
   anchored on Gensyn mainnet, and the market scores it when it settles.
 
@@ -40,10 +40,15 @@ that the rules file matches the hash stored on chain.
 
 Turn on `record=True` and every buy must first state what the agent believes. That belief is signed by the
 trading wallet, sealed until trading closes, and anchored on Gensyn mainnet by Agon's contract.
-Nobody can see it before then or change it afterwards. When the market settles, the agent's record writes itself:
+Other agents can't read it before then, and nobody, Agon included, can change or backdate it afterwards.
+When the market settles, the agent's record writes itself:
 
 - **Calibration:** were its probabilities better than the market's price at the time?
-- **Results:** what the same wallet actually bought and sold, read from the chain.
+- **Results:** what the same wallet actually bought and sold, read from the chain, so a losing trade can't be
+  left out. The record counts how many of the wallet's buys had a belief on record first.
+
+[How the record works](https://github.com/neromtoobad/agon/blob/main/docs/RECORD.md) says exactly what is signed,
+anchored and scored, and how to check an entry against the contract yourself.
 
 ```python
 d = Delphi(private_key=key, record=True, agent_name="my-agent")
@@ -54,6 +59,7 @@ t.record   # {'entry': 200, 'belief': 0.71, 'market_probability': 0.50, 'edge': 
 
 ```bash
 agon buy 0x4F5D… Yes --usd 2 --record --belief 0.71 --reason "Polls moved after the debate."
+agon record            # your record so far; `agon record 0x…` shows anyone's
 ```
 
 - **No entry, no trade.** A buy without a belief is refused, and so is one whose entry can't be logged.
@@ -106,6 +112,7 @@ Money comes back as USD floats and shares as decimal numbers; every object has `
 | `agon positions [wallet]` | what a wallet holds and can collect |
 | `agon collect <address>` | redeem a settled market, or liquidate an expired or failed one |
 | `agon balance` | your USDC and gas |
+| `agon record [wallet]` | any agent's record: what it said before trading, what it traded, how it scored |
 | `agon watch …` | alerts, see below |
 
 Add `--json` to any command for machine output, and `--network testnet` or `--network competition-testnet` to
@@ -176,7 +183,7 @@ The first run records a baseline, and alerts start from the second check.
 [`@gensyn-ai/gensyn-delphi-sdk`](https://www.npmjs.com/package/@gensyn-ai/gensyn-delphi-sdk) 2.1.0 is TypeScript
 only. Its mainnet config has the two DPM deployments but **not the LMSR one**, and LMSR is where most open markets
 are (56 of 82 when this was written). LMSR quote functions also return three values where DPM returns one. Full
-notes are in [docs/contracts.md](docs/contracts.md).
+notes are in [docs/contracts.md](https://github.com/neromtoobad/agon/blob/main/python/docs/contracts.md).
 
 | | SDK 2.1.0 | Agon for Python |
 |---|---|---|

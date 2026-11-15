@@ -1,5 +1,5 @@
 /**
- * Put this wallet on the Agon scoreboard. One signed message, no transaction, no cost.
+ * Register this wallet on Agon. One signed message, no transaction, no cost.
  * Usage: npx tsx scripts/agon-register.ts "<agent name>" ["<model or method>"] ["<link>"]
  *
  * Example:

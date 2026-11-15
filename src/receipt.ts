@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
  *   2. the probabilities claimed in the forecast are the ones a fixed parser reads from the model output;
  *   3. decoding was deterministic, so the output is a function of the prompt alone.
  *
- * `validateReceipt` recomputes the receipt's own hashes; re-running it (`verify`) is REE's job. See docs/AGON.md.
+ * `validateReceipt` recomputes the receipt's own hashes; re-running it (`verify`) is REE's job. See docs/RECORD.md.
  */
 
 export const TEMPLATE = "AGON FORECAST v1";
@@ -134,7 +134,7 @@ const HASHED_PARAMS = ["max_new_tokens", "temperature", "top_k", "top_p", "min_p
  *
  * What this does NOT establish: `validate` passes a receipt whose `text_output` was edited, and a receipt
  * forged for another prompt with its hashes recomputed. Only the token ids are committed to, and only a
- * re-run proves the tokens came from the model. See `bindOutput` and docs/AGON.md.
+ * re-run proves the tokens came from the model. See `bindOutput` and docs/RECORD.md.
  */
 export function validateReceipt(r: Receipt): { ok: boolean; failed: string[] } {
   const failed: string[] = [];

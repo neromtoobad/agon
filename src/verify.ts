@@ -101,10 +101,11 @@ export async function verify(args: string[] = []) {
   if (fs.length) {
     let badSig = 0, badLeaf = 0;
     for (const f of fs) {
-      const message = { market: f.market, probabilities: JSON.parse(f.probs), issuedAt: BigInt(f.issued_at), visibility: f.visibility, reasoningHash: f.reasoning_hash, receiptHash: f.receipt_hash };
-      const ok = await verifyTypedData({ address: f.agent, domain: lg.DOMAIN, types: lg.TYPES, primaryType: "Forecast", message, signature: f.signature }).catch(() => false);
+      const message: any = { market: f.market, probabilities: JSON.parse(f.probs), issuedAt: BigInt(f.issued_at), visibility: f.visibility, reasoningHash: f.reasoning_hash, receiptHash: f.receipt_hash, ...(f.salt ? { salt: f.salt } : {}) };
+      const types: any = lg.forecastTypes(f.salt);
+      const ok = await verifyTypedData({ address: f.agent, domain: lg.DOMAIN, types, primaryType: "Forecast", message, signature: f.signature }).catch(() => false);
       if (!ok) badSig++;
-      if (lg.leafOf(hashTypedData({ domain: lg.DOMAIN, types: lg.TYPES, primaryType: "Forecast", message }), f.agent) !== f.leaf) badLeaf++;
+      if (lg.leafOf(hashTypedData({ domain: lg.DOMAIN, types, primaryType: "Forecast", message }), f.agent) !== f.leaf) badLeaf++;
     }
     add("league forecasts are signed by their agents", badSig === 0 && badLeaf === 0, `${fs.length} forecasts, ${badSig} bad signatures, ${badLeaf} leaves that do not match their message`);
     const batches = db.prepare("SELECT * FROM league_batches ORDER BY id").all() as any[];

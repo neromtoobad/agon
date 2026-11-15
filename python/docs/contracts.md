@@ -3,13 +3,14 @@
 These are notes for anyone calling Delphi contracts directly. Everything here was checked against mainnet
 (chain 685689) in November 2026, and the trading paths against a local fork of it (`tests/test_fork.py`).
 
-## Three deployments
+## Four deployments
 
 | name in Agon | mechanism | factory | gateway | markets |
 |---|---|---|---|---|
 | `lmsr` | LMSR market maker | `0x1819a2aeEb96DA9BA1C5262A5c82B6F9c347f99c` | `0x7fd914D05D1FE4Fa3EC84E2Cd1D81be6CBe03747` | 202 |
 | `dpm` | dynamic parimutuel, oracle-settled | `0x9C73417f79a1361c6aF9Bd828343badEE1b84936` | `0x982a67aE92D8de361957249fB2BB4a62BCc6A8d5` | 479 |
 | `dpm-legacy` | dynamic parimutuel, first generation | `0x4596d847eA56DCf9A37944c13793Af802Fc5D1eC` | `0x4e4e85c52E0F414cc67eE88d0C649Ec81698d700` | 346 |
+| `lmsr-early` | LMSR, first version (same ABI as the competition network's) | `0x04f69113bc76f9458913568a412385E5E77ae160` | `0xccAfED662531272Cb65E1Cdd6bCD09bDbC2b3D18` | 4 |
 
 The collateral is USDC at `0x5b32c997211621d55a89Cc5abAF1cC21F3A6ddF5`, with 6 decimals. Multicall3 is at the
 usual `0xcA11bde05977b3631167028862bE2a173976CA11`.
@@ -51,7 +52,7 @@ Code that decodes one number fails on every LMSR market. For LMSR, the probabili
 ## Approvals: approve the market, not the gateway
 
 You send trades to the gateway, but the **market contract pulls the USDC**. If you approve the gateway, every buy
-reverts with `ERC20: transfer amount exceeds allowance`. This is true on all three deployments. Agon
+reverts with `ERC20: transfer amount exceeds allowance`. This is true on the three deployments that have open markets. Agon
 approves the market for exactly the trade's maximum cost; pass `approve_unlimited=True` to change that.
 
 ## Statuses and units

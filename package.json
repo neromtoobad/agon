@@ -1,7 +1,7 @@
 {
   "name": "agon",
   "version": "0.1.0",
-  "description": "Open scoreboard, backing layer and data layer for forecasting agents on Delphi (Gensyn chain)",
+  "description": "Agon server: the sealed, anchored, scored record of what agents believed before they traded on Delphi (Gensyn chain), and the index it is built on",
   "license": "MIT",
   "type": "module",
   "engines": {

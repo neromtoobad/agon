@@ -47,7 +47,7 @@ for (const fx of targets) {
   const parsed = parseForecast(receipt.output.text_output, fx.outcomes);
   if (DRY) { console.log("PROBE " + JSON.stringify({ model: MODEL, ok: !("error" in parsed), secs, finish: receipt.output.finish_reason, said: receipt.output.text_output.slice(-160), forecast: "error" in parsed ? parsed.error : parsed.bps, question: fx.question.slice(0, 70) })); continue; }
   if ("error" in parsed) { console.log(`✗ ${fx.question.slice(0, 60)} — ${parsed.error}: ${JSON.stringify(receipt.output.text_output).slice(0, 80)}`); continue; }
-  const message = { market: fx.market, probabilities: parsed.bps, issuedAt: Math.floor(Date.now() / 1000), visibility: 1, reasoningHash: ZERO32, receiptHash: receiptHashHex(receipt) };
+  const message = { market: fx.market, probabilities: parsed.bps, issuedAt: Math.floor(Date.now() / 1000), visibility: 1, reasoningHash: ZERO32, receiptHash: receiptHashHex(receipt), salt: "0x" + [...crypto.getRandomValues(new Uint8Array(32))].map((b) => b.toString(16).padStart(2, "0")).join("") };
   const signature = await account!.signTypedData({ domain, types, primaryType: "Forecast", message: { ...message, issuedAt: BigInt(message.issuedAt) } });
   const res = await post(BASE, "/league/v1/forecasts", { address: account!.address, message, signature, receipt: found!.text });
   console.log(`${res.ok ? "✓" : "✗"} ${fx.question.slice(0, 60)} — ${fx.outcomes.map((o: string, i: number) => `${o} ${(parsed.bps[i] / 100).toFixed(0)}%`).slice(0, 3).join(", ")} · ${secs}s · ${res.ok ? `forecast ${res.body.id}, ${res.body.receipt?.tier} tier` : res.body.error}`);

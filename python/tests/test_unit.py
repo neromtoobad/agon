@@ -171,7 +171,7 @@ def test_forecast_signature_recovers_to_the_wallet():
     key = "0x" + "11" * 32
     r = Recorder(key, url="http://unused")
     msg = {"market": "0x4F5DC6b636c226CeC0C2403f988f24431b9Cc463", "probabilities": [6200, 3800], "issuedAt": 1763190000,
-           "visibility": 0, "reasoningHash": "0x" + "00" * 32, "receiptHash": "0x" + "00" * 32}
+           "visibility": 0, "reasoningHash": "0x" + "00" * 32, "receiptHash": "0x" + "00" * 32, "salt": "0x" + "ab" * 32}
     sig = r._sign("Forecast", msg)
     from agon.recorder import TYPES
     typed = encode_typed_data(full_message={"types": {"EIP712Domain": [{"name": "name", "type": "string"}, {"name": "version", "type": "string"},

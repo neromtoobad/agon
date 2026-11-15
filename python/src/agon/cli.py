@@ -1,5 +1,5 @@
 """Command line: `agon markets`, `agon search`, `agon market`, `agon quote`, `agon buy`, `agon sell`,
-`agon positions`, `agon collect`, `agon balance`, `agon watch`."""
+`agon positions`, `agon collect`, `agon balance`, `agon record`, `agon watch`."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import json
 import sys
 
 from .client import Delphi, DelphiError
+from .recorder import RecorderError
 
 
 def _out(obj, as_json: bool) -> None:
@@ -72,6 +73,9 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("balance", help="your wallet's USDC and gas")
 
+    s = sub.add_parser("record", help="an agent's record on Agon: what it said before trading, what it traded, how it scored")
+    s.add_argument("wallet", nargs="?", help="defaults to your own wallet")
+
     s = sub.add_parser("watch", help="alerts: new markets, big moves, closing soon, settlements, money to collect")
     s.add_argument("--every", type=float, default=60, help="seconds between checks")
     s.add_argument("--move", type=float, default=0.10, help="alert on probability moves of this size (0.10 = 10 points)")
@@ -90,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
     d = Delphi(a.network or os.environ.get("AGON_NETWORK", "mainnet"), record=record if a.cmd == "buy" else False)
     try:
         return _run(d, a)
-    except (DelphiError, ValueError) as e:
+    except (DelphiError, ValueError, RecorderError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
 
@@ -179,6 +183,41 @@ def _run(d: Delphi, a) -> int:
     if a.cmd == "balance":
         b = d.balance()
         _out(b, True) if a.json else print(f"{b['wallet']}: ${b['usd']:.2f} USDC, {b['eth']:.6f} ETH for gas")
+        return 0
+    if a.cmd == "record":
+        from .recorder import fetch_record
+        wallet = a.wallet or d.address
+        if not wallet:
+            raise DelphiError("give a wallet address, or set AGON_PRIVATE_KEY to see your own record")
+        rec = fetch_record(wallet)
+        if a.json:
+            _out(rec, True)
+            return 0
+        if not rec["registered"]:
+            print(f"{wallet} has no record on Agon yet. Trade with --record (or record=True) to start one.")
+            return 0
+        s = rec.get("summary") or {}
+        print(f"{rec['name']}  {rec['address']}")
+        print(f"  buys with a forecast on record first: {s['buys_with_belief']} of {s['buys']}" if s.get("buys") else "  no trades by this wallet yet")
+        print(f"  forecasts: {len(rec['forecasts'])} on {s.get('markets_forecast', 0)} markets, {s.get('sealed_now', 0)} sealed now")
+        if rec.get("scored_markets"):
+            print(f"  points: {rec['points']:+.1f} over {rec['scored_markets']} settled markets"
+                  f" (error {s['agent_brier']:.3f}, market {s['market_brier']:.3f}; lower is better)")
+        if s.get("traded_markets"):
+            pnl = "" if s.get("realized_pnl_usd") is None else f", {s['realized_pnl_usd']:+.2f} on closed markets"
+            print(f"  traded: ${s['spent_usd']:.2f} across {s['traded_markets']} markets{pnl}")
+        for m in (rec.get("markets") or [])[:25]:
+            f, then, outs = m["latest"], m.get("market_probabilities_then") or [], m.get("outcomes") or []
+            if f.get("sealed"):
+                said = "sealed until close"
+            else:
+                k = max(range(len(f["probabilities"])), key=lambda i: f["probabilities"][i])
+                said = f"{outs[k] if k < len(outs) else k} {f['probabilities'][k]:.0%}" + (f" (market then {then[k]:.0%})" if then else "")
+            buys = [t for t in m["trades"] if t["kind"] == "buy"]
+            traded = f"  bought ${sum(t['usd'] or 0 for t in buys):.2f}" if buys else ""
+            pts = f"  {m['score']['points']:+.1f} pts" if m.get("score") else ""
+            print(f"\n  {m['question']}\n    said: {said}{traded}{pts}  [{m.get('status') or 'closed'}]")
+        print(f"\n{rec['record_url']}")
         return 0
     if a.cmd == "watch":
         from .watch import WatchConfig, Watcher, print_sink, telegram_sink, webhook_sink

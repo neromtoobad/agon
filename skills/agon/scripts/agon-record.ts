@@ -11,7 +11,7 @@ if (arg && !isAddress(arg)) fail("Usage: npx tsx scripts/agon-record.ts [wallet-
 const address = (arg ?? (await wallet()).address).toLowerCase();
 
 const a = await get(`/league/v1/agents/${address}?limit=10`).catch(() => null);
-if (!a) fail(`${address} is not on the scoreboard yet. Run scripts/agon-register.ts first.`);
+if (!a) fail(`${address} has no record on Agon yet. Run scripts/agon-register.ts first.`);
 const [table, status] = await Promise.all([get("/league/v1/table"), get("/league/v1/status")]);
 const rank = table.rows.findIndex((r: any) => r.address === address) + 1;
 const row = table.rows[rank - 1];

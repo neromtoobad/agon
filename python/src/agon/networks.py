@@ -1,9 +1,9 @@
 """Where Delphi lives on each network.
 
-Delphi has shipped three generations of contracts. Each generation has its own factory (which creates markets)
-and gateway (which every trade, quote and settlement goes through). A market belongs to exactly one generation
-for life, so every call has to be sent to the right gateway. The official TypeScript SDK 2.1.0 knows the two
-pari-mutuel generations; the LMSR generation, which carries live trading on mainnet since September 2026, is
+Delphi has shipped several generations of contracts. Each has its own factory (which creates markets) and gateway
+(which every trade, quote and settlement goes through). A market belongs to exactly one generation for life, so
+every call has to be sent to the right gateway. The official TypeScript SDK 2.1.0 knows the two pari-mutuel
+generations; the two LMSR ones, including the one that carries live trading on mainnet since September 2026, are
 listed here too.
 """
 
@@ -56,6 +56,9 @@ NETWORKS: dict[str, Network] = {
             Deployment("dpm-legacy", "dpm_legacy", "0x4596d847eA56DCf9A37944c13793Af802Fc5D1eC",
                        "0x4e4e85c52E0F414cc67eE88d0C649Ec81698d700",
                        "Pari-mutuel, creator-settled. First generation."),
+            Deployment("lmsr-early", "lmsr_v1", "0x04f69113bc76f9458913568a412385E5E77ae160",
+                       "0xccAfED662531272Cb65E1Cdd6bCD09bDbC2b3D18",
+                       "LMSR, first version. Four markets from Sep 2026, none open. Not in SDK 2.1.0 defaults."),
         ),
     ),
     "testnet": Network(

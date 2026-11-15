@@ -39,7 +39,7 @@ if (args.length === 3 && n === 2 && Number.isInteger(Number(args[1])) && Number(
 const bps = toBps(probs);
 
 const w = await wallet(), { domain, types } = await signing();
-const message = { market: m.address, probabilities: bps, issuedAt: now(), visibility: isPublic ? 1 : 0, reasoningHash: why ? hashText(why) : ZERO32, receiptHash: ZERO32 };
+const message = { market: m.address, probabilities: bps, issuedAt: now(), visibility: isPublic ? 1 : 0, reasoningHash: why ? hashText(why) : ZERO32, receiptHash: ZERO32, salt: "0x" + [...crypto.getRandomValues(new Uint8Array(32))].map((b) => b.toString(16).padStart(2, "0")).join("") };
 const signature = await w.walletClient.signTypedData({ domain, types, primaryType: "Forecast", message: { ...message, issuedAt: BigInt(message.issuedAt) } });
 const r = await post("/league/v1/forecasts", { address: w.address, message, signature, ...(why ? { reasoning: why } : {}) });
 if (!r.ok) fail("Agon refused the forecast: " + r.body.error + (/not a registered agent/i.test(r.body.error ?? "") ? "\nRun scripts/agon-register.ts first." : ""));

@@ -1,4 +1,4 @@
-// Agon in the browser: connect a wallet, put it on the scoreboard, and sign forecasts. No code and no fee.
+// Agon in the browser: connect a wallet, register it, and sign forecasts. No code and no fee.
 // Everything is a signed message; nothing is sent to the chain and nothing can move money.
 // Loaded before app.js. It uses app.js's helpers ($, esc, modal, league, when, short) only when its functions run.
 
@@ -80,13 +80,13 @@ async function walletButton() {
 
 function accountModal() {
   modal(`<h3>${esc(me.agent?.name ?? "Connected")}</h3><p class="mono">${me.address}</p>
-    ${me.agent ? `<p>On the scoreboard since ${when(me.agent.registered_at)}.</p><div class="row"><a class="btn go" href="#/agent/${me.address}" data-close>My forecasts</a><a class="btn" href="#/markets" data-close>Pick a market</a></div>`
-      : `<p>This wallet is not on the scoreboard yet.</p><div class="row"><button class="btn go" data-register>Join the scoreboard</button></div>`}
+    ${me.agent ? `<p>Registered since ${when(me.agent.registered_at)}.</p><div class="row"><a class="btn go" href="#/agent/${me.address}" data-close>My forecasts</a><a class="btn" href="#/markets" data-close>Pick a market</a></div>`
+      : `<p>This wallet has no record yet.</p><div class="row"><button class="btn go" data-register>Start a record</button></div>`}
     <p style="margin-top:14px"><a href="#" data-disconnect>Disconnect</a></p>`);
 }
 
 function registerModal(message = "") {
-  modal(`<h3>Join the scoreboard</h3>
+  modal(`<h3>Start a record</h3>
     <p>Pick the name your forecasts appear under. You sign one message with your wallet. It costs nothing and sends nothing to the chain.</p>
     ${message ? `<div class="note">${esc(message)}</div>` : ""}
     <label class="field"><span>Name (2 to 40 characters)</span><input id="r-name" maxlength="40" placeholder="Night Owl" autocomplete="off"></label>
@@ -133,7 +133,7 @@ async function join() {
     if (!r.ok) return registerModal(r.body.error === "that name is taken" ? "That name is taken. Pick another." : "Agon refused: " + (r.body.error ?? "unknown error"));
     await loadMe();
     if (location.hash.startsWith("#/call/")) { $("#modal").innerHTML = ""; return route(); } // already on a market: go straight to the form
-    modal(`<h3>You are on the scoreboard</h3><p><b>${esc(name)}</b> can now forecast any market that counts. Open a market and set your odds.</p><div class="row"><a class="btn go" href="#/markets" data-close>Pick a market</a></div>`);
+    modal(`<h3>Your record has started</h3><p><b>${esc(name)}</b> can now forecast any market that counts. Open a market and set your odds.</p><div class="row"><a class="btn go" href="#/markets" data-close>Pick a market</a></div>`);
   } catch (e) { registerModal(reason(e)); }
 }
 
@@ -154,7 +154,7 @@ function forecastCard(m, lf) {
   const outcomes = m.outcomes ?? [], n = outcomes.length;
   if (n > 12) return `<div class="card pad"><h3>Forecast this market</h3><p>This market has ${n} outcomes, which is too many for this form. Agents can forecast it through the API.</p><div class="row" style="max-width:240px"><a class="btn" href="#enter">How to enter</a></div></div>`;
   if (!me.address) return `<div class="card pad"><h3>Forecast this market</h3><p>Say how likely each outcome is. Your forecast stays sealed until trading closes, then it is scored against the market price. It is free: a forecast is a signed message, not a bet.</p><div class="row" style="max-width:260px"><button class="btn go" data-connect>Connect wallet</button></div></div>`;
-  if (!me.agent) return `<div class="card pad"><h3>Forecast this market</h3><p>Your wallet is connected. Join the scoreboard first: one signed message, free.</p><div class="row" style="max-width:260px"><button class="btn go" data-register>Join the scoreboard</button></div></div>`;
+  if (!me.agent) return `<div class="card pad"><h3>Forecast this market</h3><p>Your wallet is connected. Register first: one signed message, free.</p><div class="row" style="max-width:260px"><button class="btn go" data-register>Start a record</button></div></div>`;
   const last = mine.get(m.address), start = last?.bps?.map((b) => b / 100) ?? outcomes.map((_, i) => Math.round(Math.min(99, Math.max(1, (m.probabilities?.[i] ?? 1 / n) * 100))));
   return `<div class="card pad" id="fc" data-market="${m.address}" data-n="${n}">
     <h3>Your forecast</h3>
@@ -184,7 +184,7 @@ async function sendForecast() {
   const bps = toBasisPoints(percents), why = $("#fc-why").value.trim(), isPublic = $("#fc-public").checked;
   msg.style.color = "var(--ink)"; msg.textContent = "Waiting for your wallet…";
   try {
-    const message = { market, probabilities: bps, issuedAt: nowSec(), visibility: isPublic ? 1 : 0, reasoningHash: why ? hashText(why) : ZERO32, receiptHash: ZERO32 };
+    const message = { market, probabilities: bps, issuedAt: nowSec(), visibility: isPublic ? 1 : 0, reasoningHash: why ? hashText(why) : ZERO32, receiptHash: ZERO32, salt: "0x" + [...crypto.getRandomValues(new Uint8Array(32))].map((b) => b.toString(16).padStart(2, "0")).join("") };
     const signature = await signTyped("Forecast", message);
     const r = await postJson("/forecasts", { address: me.address, message, signature, ...(why ? { reasoning: why } : {}) });
     if (!r.ok) { msg.style.color = "#b3361c"; msg.textContent = "Agon refused it: " + (r.body.error ?? "unknown error") + "."; return; }

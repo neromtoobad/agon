@@ -1,7 +1,7 @@
 import type { Hono } from "hono";
 import { db } from "../db.ts";
 import { lc } from "../config.ts";
-import { J } from "../views.ts";
+import { J, probsAt, eventView } from "../views.ts";
 import {
   DOMAIN, TYPES, Refused, registerAgent, submitForecast, agentView, forecastView, proofFor, openFixtures, fixture,
   forecasterTable, traderTable, modelTable, submitVerification, strictPrompt, receiptView, seasonOf, seasonWindow, RANK_MIN_FORECAST, RANK_MIN_TRADES, RANK_MIN_COST, MIN_FIXTURE_SECONDS,
@@ -13,8 +13,63 @@ const addr = (s: string) => (/^0x[0-9a-fA-F]{40}$/.test(s) ? lc(s) : null);
 const int = (v: string | undefined, d: number, max: number) => Math.min(Math.max(Number.isFinite(Number(v)) ? Number(v) : d, 0), max);
 const count = (q: string, ...a: any[]) => Object.values(db.prepare(q).get(...a) as any)[0] as number;
 
+const r6 = (x: number) => Math.round(x * 1e6) / 1e6;
+
+/**
+ * An agent's record, market by market: what it said, the market price when it said it, what its wallet then traded
+ * (read from the chain, so trades cannot be left out), and how the market ended.
+ * `summary.buys_with_belief` counts the wallet's buys that had a forecast on record first.
+ */
+function recordOf(a: string, fs: any[], scores: any[]) {
+  const evs = db.prepare("SELECT * FROM events WHERE wallet = ? AND kind IN ('buy','sell','redeem','liquidate') ORDER BY block, log_index").all(a) as any[];
+  const firstSaid = new Map((db.prepare("SELECT market, MIN(received_ts) t FROM league_forecasts WHERE agent = ? GROUP BY market").all(a) as any[]).map((r) => [r.market, r.t as number]));
+  const ledger = new Map((db.prepare("SELECT * FROM wallet_markets WHERE wallet = ?").all(a) as any[]).map((r) => [r.market, r]));
+  const score = new Map(scores.map((s) => [s.market, s]));
+  const by = new Map<string, any[]>();
+  for (const f of fs) (by.get(f.market) ?? by.set(f.market, []).get(f.market)!).push(f); // newest first
+  const markets = [...by.entries()].map(([market, list]) => {
+    const f = list[0], outcomes = J(f.outcomes) as string[] | null, w = ledger.get(market);
+    const trades = evs.filter((e) => e.market === market).map((e) => { const v = eventView(e, outcomes); return { kind: v.kind, outcome: v.outcome, outcome_label: v.outcome_label, usd: v.usd, shares: v.shares, price: v.price, at: v.at, tx: v.tx, after_forecast: e.ts == null || e.ts >= (firstSaid.get(market) ?? Infinity) }; });
+    return {
+      market, question: f.question, outcomes, status: f.status, trading_closes_at: iso(f.d),
+      winning_outcome: f.status === "settled" ? f.winning_outcome : null,
+      forecasts: list.length, first_forecast_at: iso(firstSaid.get(market) ?? null),
+      latest: forecastView(f, f.d),
+      market_probabilities_then: probsAt(market, f.received_ts) ?? Array(f.n).fill(1 / f.n), // the market's price when the latest forecast arrived
+      score: score.get(market) ?? null,
+      trades,
+      position: w ? { cost_usd: r6(w.cost), returned_usd: r6(w.sale_proceeds + w.redeemed + w.liquidated), pnl_usd: w.closed && w.pnl != null ? r6(w.pnl) : null, trades: w.n_trades } : null,
+    };
+  });
+  const buys = evs.filter((e) => e.kind === "buy");
+  const closed = [...ledger.values()].filter((w) => w.closed && w.pnl != null);
+  return {
+    summary: {
+      markets_forecast: firstSaid.size,
+      sealed_now: fs.filter((f) => f.visibility !== 1 && Date.now() / 1000 < f.d).length,
+      buys: buys.length,
+      buys_with_belief: buys.filter((e) => firstSaid.has(e.market) && (e.ts == null || e.ts >= firstSaid.get(e.market)!)).length,
+      traded_markets: ledger.size, spent_usd: r6([...ledger.values()].reduce((n, w) => n + w.cost, 0)),
+      realized_pnl_usd: closed.length ? r6(closed.reduce((n, w) => n + w.pnl, 0)) : null,
+      agent_brier: scores.length ? r6(scores.reduce((n, s) => n + s.agent_brier, 0) / scores.length) : null,
+      market_brier: scores.length ? r6(scores.reduce((n, s) => n + s.market_brier, 0) / scores.length) : null,
+    },
+    markets,
+  };
+}
+
 export function mountLeague(app: Hono) {
+  // Writes are limited per caller address so one client cannot flood the record. Reads are not limited here.
+  const WRITES_PER_MINUTE = Number(process.env.AGON_WRITES_PER_MINUTE ?? 300), hits = new Map<string, number[]>();
+  const tooMany = (c: any) => {
+    const ip = (c.req.header("x-forwarded-for") ?? "").split(",")[0].trim() || "local", t = Date.now();
+    const recent = (hits.get(ip) ?? []).filter((x) => t - x < 60_000);
+    recent.push(t); hits.set(ip, recent);
+    if (hits.size > 10_000) hits.clear();
+    return recent.length > WRITES_PER_MINUTE;
+  };
   const guard = (fn: (c: any) => Promise<any>) => async (c: any) => {
+    if (tooMany(c)) return c.json({ error: `too many writes from this address: the limit is ${WRITES_PER_MINUTE} a minute` }, 429);
     try { return c.json(await fn(c)); }
     catch (e) { if (e instanceof Refused) return c.json({ error: e.message }, 400); throw e; }
   };
@@ -34,21 +89,23 @@ export function mountLeague(app: Hono) {
   });
 
   /** Everything a client needs to sign: the EIP-712 domain and types. */
-  app.get("/league/v1/signing", (c) => c.json({ domain: DOMAIN, types: TYPES, note: "probabilities are basis points per outcome, 100 to 9900, adding up to 10000. visibility 0 is sealed until trading closes, 1 is public now. reasoningHash is keccak256 of the UTF-8 reasoning text, or 32 zero bytes. receiptHash is the hex of an REE receipt's receipt_hash, or 32 zero bytes; send the receipt file's text unmodified as `receipt`." }));
+  app.get("/league/v1/signing", (c) => c.json({ domain: DOMAIN, types: TYPES, note: "probabilities are basis points per outcome, 100 to 9900, adding up to 10000. visibility 0 is sealed until trading closes, 1 is public now. salt is 32 random bytes, new for every forecast; it stops a sealed forecast being guessed from its fingerprint and is revealed with it. reasoningHash is keccak256 of the UTF-8 reasoning text, or 32 zero bytes. receiptHash is the hex of an REE receipt's receipt_hash, or 32 zero bytes; send the receipt file's text unmodified as `receipt`." }));
 
   app.post("/league/v1/agents", guard(async (c) => registerAgent(await c.req.json().catch(() => ({})))));
   app.get("/league/v1/agents", (c) => c.json({ agents: (db.prepare("SELECT * FROM league_agents ORDER BY registered_ts").all() as any[]).map(agentView) }));
   app.get("/league/v1/agents/:address", (c) => {
     const a = addr(c.req.param("address")); if (!a) return c.json({ error: "bad address" }, 400);
     const row = db.prepare("SELECT * FROM league_agents WHERE address = ?").get(a); if (!row) return c.json({ error: "not a registered agent" }, 404);
-    const fs = db.prepare(`SELECT f.*, m.trading_deadline d, m.question, m.outcomes, m.status, m.winning_outcome FROM league_forecasts f JOIN markets m ON m.address = f.market WHERE f.agent = ? ORDER BY f.id DESC LIMIT ?`).all(a, int(c.req.query("limit"), 100, 500)) as any[];
+    const fs = db.prepare(`SELECT f.*, m.trading_deadline d, m.question, m.outcomes, m.status, m.winning_outcome, m.outcome_count n FROM league_forecasts f JOIN markets m ON m.address = f.market WHERE f.agent = ? ORDER BY f.id DESC LIMIT ?`).all(a, int(c.req.query("limit"), 100, 500)) as any[];
     const scores = db.prepare("SELECT * FROM league_scores WHERE agent = ? ORDER BY resolved_ts DESC").all(a) as any[];
     const season = seasonOf(Math.floor(Date.now() / 1000));
     const row2 = forecasterTable(season).find((r) => r.address === a);
+    const scoreView = (s: any) => ({ market: s.market, points: s.points, agent_brier: s.b_agent, market_brier: s.b_market, coverage: s.coverage, forecasts: s.forecasts, season: s.season });
     return c.json({
       ...agentView(row), season, points: row2?.points ?? 0, scored_markets: row2?.markets ?? 0, ranked: row2?.ranked ?? false,
+      ...recordOf(a, fs, scores.map(scoreView)),
       forecasts: fs.map((f) => ({ ...forecastView(f, f.d), question: f.question, outcomes: J(f.outcomes), market_status: f.status })),
-      scores: scores.map((s) => ({ market: s.market, points: s.points, agent_brier: s.b_agent, market_brier: s.b_market, coverage: s.coverage, forecasts: s.forecasts, season: s.season })),
+      scores: scores.map(scoreView),
     });
   });
 
@@ -74,13 +131,13 @@ export function mountLeague(app: Hono) {
   app.get("/league/v1/markets/:address/strict-prompt", (c) => {
     const a = addr(c.req.param("address")), model = c.req.query("model") ?? "";
     const p = a ? strictPrompt(a, model) : null;
-    return p ? c.json({ market: a, model, prompt: p }) : c.json({ error: "not a league fixture" }, 404);
+    return p ? c.json({ market: a, model, prompt: p }) : c.json({ error: "forecasts on this market are not recorded" }, 404);
   });
   app.get("/league/v1/forecasts/:id/proof", (c) => { const p = proofFor(Number(c.req.param("id"))); return p ? c.json(p) : c.json({ error: "no such forecast" }, 404); });
 
   app.get("/league/v1/markets/:address/forecasts", (c) => {
     const a = addr(c.req.param("address")); if (!a) return c.json({ error: "bad address" }, 400);
-    const m = fixture(a); if (!m) return c.json({ error: "not a league fixture" }, 404);
+    const m = fixture(a); if (!m) return c.json({ error: "forecasts on this market are not recorded" }, 404);
     const fs = db.prepare(`SELECT f.*, g.name FROM league_forecasts f JOIN league_agents g ON g.address = f.agent WHERE f.market = ? ORDER BY f.id DESC`).all(a) as any[];
     const latest = new Map<string, any>(); for (const f of fs) if (!latest.has(f.agent)) latest.set(f.agent, f);
     return c.json({ market: a, trading_closes_at: iso(m.trading_deadline), agents: latest.size, forecasts: fs.length,

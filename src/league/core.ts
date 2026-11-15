@@ -24,12 +24,16 @@ export const TYPES = {
   Forecast: [
     { name: "market", type: "address" }, { name: "probabilities", type: "uint16[]" }, { name: "issuedAt", type: "uint64" },
     { name: "visibility", type: "uint8" }, { name: "reasoningHash", type: "bytes32" }, { name: "receiptHash", type: "bytes32" },
+    { name: "salt", type: "bytes32" },
   ],
   Verification: [
     { name: "receiptHash", type: "bytes32" }, { name: "matched", type: "bool" }, { name: "outputHash", type: "bytes32" },
     { name: "reeVersion", type: "string" }, { name: "issuedAt", type: "uint64" },
   ],
 } as const;
+/** Forecasts received before 15 Nov 2026 were signed without a salt. They are kept and still checked against this shape. */
+export const LEGACY_TYPES = { Forecast: TYPES.Forecast.filter((f) => f.name !== "salt") } as const;
+export const forecastTypes = (salt: string | null | undefined) => (salt ? TYPES : LEGACY_TYPES);
 export const ZERO32 = ("0x" + "0".repeat(64)) as Hex;
 
 export const SEASON_EPOCH = Number(process.env.AGON_SEASON_EPOCH ?? Date.UTC(2026, 10, 9) / 1000); // Monday 9 Nov 2026
@@ -72,6 +76,8 @@ CREATE TABLE IF NOT EXISTS league_scores (
   PRIMARY KEY (agent, market)
 );
 `);
+
+if (!(db.prepare("PRAGMA table_info(league_forecasts)").all() as any[]).some((c) => c.name === "salt")) db.exec("ALTER TABLE league_forecasts ADD COLUMN salt TEXT");
 
 export class Refused extends Error { status = 400; }
 const refuse = (m: string): never => { throw new Refused(m); };
@@ -129,7 +135,7 @@ export async function submitForecast(input: { address: string; message: any; sig
   if (!db.prepare("SELECT 1 FROM league_agents WHERE address = ?").get(a)) refuse("this address is not a registered agent");
   if (!m || !isAddress(m.market ?? "")) refuse("message.market is missing or malformed");
   const market = lc(m.market), mk = fixture(market);
-  if (!mk) refuse("this market is not a league fixture");
+  if (!mk) refuse("forecasts on this market are not recorded: it was open for under 12 hours, or its text does not match the chain");
   const t = now();
   if (mk.status !== "open" || t >= mk.trading_deadline) refuse("trading on this market has closed");
   const probs: number[] = Array.isArray(m.probabilities) ? m.probabilities.map(Number) : [];
@@ -140,6 +146,9 @@ export async function submitForecast(input: { address: string; message: any; sig
   if (!Number.isFinite(issuedAt) || Math.abs(issuedAt - t) > CLOCK_SKEW) refuse("issuedAt must be within ten minutes of now");
   if (visibility !== 0 && visibility !== 1) refuse("visibility must be 0 (sealed) or 1 (public)");
   for (const k of ["reasoningHash", "receiptHash"]) if (!/^0x[0-9a-fA-F]{64}$/.test(m[k] ?? "")) refuse(`${k} must be 32 bytes`);
+  // The salt keeps a sealed forecast from being guessed from its fingerprint: without it, a two-outcome forecast with no
+  // reasoning has only a few million possible messages. It is revealed with the forecast when trading closes.
+  if (!/^0x[0-9a-fA-F]{64}$/.test(m.salt ?? "") || /^0x0{64}$/.test(m.salt)) refuse("message.salt must be 32 random bytes (older clients did not send one: upgrade, e.g. pip install -U agon-delphi)");
   if (reasoning != null) {
     if (typeof reasoning !== "string" || reasoning.length > 4000) refuse("reasoning must be text of at most 4000 characters");
     if (keccak256(toHex(reasoning)) !== m.reasoningHash.toLowerCase()) refuse("reasoningHash is not the hash of the reasoning text");
@@ -155,7 +164,7 @@ export async function submitForecast(input: { address: string; message: any; sig
     const chk = checkReceipt(receipt, text, probs, receipt.output?.text_output ?? "", tier === "strict" ? STRICT_PACK : undefined, tier === "strict" ? directiveFor(receipt.model?.name ?? "") : undefined);
     if (!chk.ok) refuse("receipt refused: " + chk.reasons.join("; "));
   } else if (m.receiptHash !== ZERO32) refuse("receiptHash is set but no receipt was sent");
-  const msg = { market: m.market as Hex, probabilities: probs, issuedAt: BigInt(issuedAt), visibility, reasoningHash: m.reasoningHash as Hex, receiptHash: m.receiptHash as Hex };
+  const msg = { market: m.market as Hex, probabilities: probs, issuedAt: BigInt(issuedAt), visibility, reasoningHash: m.reasoningHash as Hex, receiptHash: m.receiptHash as Hex, salt: m.salt.toLowerCase() as Hex };
   const ok = await verifyTypedData({ address: address as Hex, domain: DOMAIN, types: TYPES, primaryType: "Forecast", message: msg, signature: signature as Hex }).catch(() => false);
   if (!ok) refuse("signature does not match this address and message");
   const last = db.prepare("SELECT received_ts t FROM league_forecasts WHERE agent = ? AND market = ? ORDER BY id DESC LIMIT 1").get(a, market) as any;
@@ -163,8 +172,8 @@ export async function submitForecast(input: { address: string; message: any; sig
   const digest = hashTypedData({ domain: DOMAIN, types: TYPES, primaryType: "Forecast", message: msg });
   const leaf = leafOf(digest, a);
   if (db.prepare("SELECT 1 FROM league_forecasts WHERE leaf = ?").get(leaf)) refuse("this exact forecast was already received");
-  const r = db.prepare(`INSERT INTO league_forecasts(agent, market, probs, issued_at, received_ts, visibility, reasoning, reasoning_hash, receipt_hash, digest, leaf, signature)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(a, market, JSON.stringify(probs), issuedAt, t, visibility, reasoning ?? null, m.reasoningHash.toLowerCase(), m.receiptHash.toLowerCase(), digest, leaf, signature);
+  const r = db.prepare(`INSERT INTO league_forecasts(agent, market, probs, issued_at, received_ts, visibility, reasoning, reasoning_hash, receipt_hash, digest, leaf, signature, salt)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(a, market, JSON.stringify(probs), issuedAt, t, visibility, reasoning ?? null, m.reasoningHash.toLowerCase(), m.receiptHash.toLowerCase(), digest, leaf, signature, msg.salt);
   const id = Number(r.lastInsertRowid);
   if (receipt && tier) {
     const rh = receiptHashHex(receipt);
@@ -246,7 +255,7 @@ export const leafOf = (digest: string, agent: string) => keccak256(concat([diges
 export function forecastView(f: any, deadline: number) {
   const open = f.visibility === 1 || now() >= deadline;
   const v: any = { id: f.id, agent: f.agent, market: f.market, leaf: f.leaf, received_at: new Date(f.received_ts * 1000).toISOString(), sealed: !open, batch: f.batch };
-  if (open) Object.assign(v, { probabilities: (JSON.parse(f.probs) as number[]).map((p) => p / 10000), issued_at: f.issued_at, visibility: f.visibility, reasoning: f.reasoning, reasoning_hash: f.reasoning_hash, receipt_hash: f.receipt_hash, digest: f.digest, signature: f.signature });
+  if (open) Object.assign(v, { probabilities: (JSON.parse(f.probs) as number[]).map((p) => p / 10000), issued_at: f.issued_at, visibility: f.visibility, reasoning: f.reasoning, reasoning_hash: f.reasoning_hash, receipt_hash: f.receipt_hash, salt: f.salt ?? null, digest: f.digest, signature: f.signature });
   const rc = receiptView(f.id, open);
   if (rc) v.receipt = rc;
   return v;

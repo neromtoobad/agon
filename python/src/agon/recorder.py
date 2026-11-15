@@ -7,7 +7,8 @@ When the market settles, the agent's record writes itself:
 - results: what the same wallet actually bought and sold, read from the chain
 
 The entry is signed with the trading wallet's own key (EIP-712), so the record and the trades share one address.
-Entries are sealed until trading closes: nobody, including Agon, can show or change them before then.
+Entries are sealed until trading closes: Agon keeps them hidden until then, and once an entry's batch is anchored
+(within ten minutes) nobody, Agon included, can change or backdate it.
 
     d = Delphi(private_key=key, record=True)
     d.buy(m, "Yes", usd=2, belief={"Yes": 0.71}, reasoning="Polls moved after the debate ...")
@@ -16,6 +17,7 @@ Entries are sealed until trading closes: nobody, including Agon, can show or cha
 from __future__ import annotations
 
 import os
+import secrets
 import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Sequence
@@ -40,6 +42,7 @@ TYPES = {
         {"name": "market", "type": "address"}, {"name": "probabilities", "type": "uint16[]"},
         {"name": "issuedAt", "type": "uint64"}, {"name": "visibility", "type": "uint8"},
         {"name": "reasoningHash", "type": "bytes32"}, {"name": "receiptHash", "type": "bytes32"},
+        {"name": "salt", "type": "bytes32"},
     ],
 }
 
@@ -101,6 +104,23 @@ def belief_vector(m: Market, belief: Mapping[Any, float] | Sequence[float]) -> l
     if any(not 0 <= v <= 1 for v in out) or abs(sum(out) - 1) > 0.02:
         raise ValueError(f"stated probabilities must each be 0-1 and add up to 1 (these add up to {sum(out):.2f})")
     return out
+
+
+def fetch_record(address: str, url: str | None = None, *, timeout: float = 30) -> dict:
+    """Any agent's public record, no key needed: a summary, then market by market what it said, the market price
+    when it said it, what the same wallet traded (read from the chain) and how it ended. Sealed entries show no
+    numbers until trading closes."""
+    base = (url or os.environ.get("AGON_URL") or DEFAULT_URL).rstrip("/")
+    try:
+        r = httpx.get(f"{base}/league/v1/agents/{address.lower()}", params={"limit": 500}, timeout=timeout,
+                      headers={"user-agent": "agon"})
+    except httpx.HTTPError as e:
+        raise RecorderError(f"can't reach Agon at {base}: {e}") from None
+    if r.status_code == 404:
+        return {"address": address, "registered": False, "summary": {}, "markets": [], "forecasts": []}
+    if r.status_code >= 400:
+        raise RecorderError(f"Agon answered HTTP {r.status_code}")
+    return {"registered": True, "record_url": f"{base}/#/agent/{address.lower()}", **r.json()}
 
 
 class Recorder:
@@ -184,7 +204,9 @@ class Recorder:
             import json
             receipt_hash = "0x" + json.loads(receipt)["hashes"]["receipt_hash"].removeprefix("0x").lower()
         msg = {"market": Web3.to_checksum_address(market.address), "probabilities": bp, "issuedAt": int(time.time()),
-               "visibility": 1 if public else 0, "reasoningHash": rh, "receiptHash": receipt_hash}
+               "visibility": 1 if public else 0, "reasoningHash": rh, "receiptHash": receipt_hash,
+               # random per entry, so a sealed belief can't be guessed from its public fingerprint
+               "salt": "0x" + secrets.token_hex(32)}
         body: dict[str, Any] = {"address": self.address, "message": msg, "signature": self._sign("Forecast", msg)}
         if reasoning:
             body["reasoning"] = reasoning
@@ -196,9 +218,5 @@ class Recorder:
                      proof_url=f"{self.url}/league/v1/forecasts/{out['id']}/proof", leaf=out.get("leaf", ""))
 
     def record(self) -> dict:
-        """The agent's record so far: points, scored markets, and every entry (sealed ones show no numbers)."""
-        r = self.http.get(f"{self.url}/league/v1/agents/{self.address.lower()}")
-        if r.status_code == 404:
-            return {"address": self.address, "registered": False, "forecasts": []}
-        r.raise_for_status()
-        return r.json()
+        """This agent's record so far. See ``fetch_record``."""
+        return fetch_record(self.address, self.url)

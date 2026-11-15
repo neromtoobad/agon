@@ -42,7 +42,7 @@ export async function wallet(): Promise<DelphiSigner> {
   return signer;
 }
 
-/** Agon's signing rules. Refuses to go on if the wallet is on a different chain from the scoreboard. */
+/** Agon's signing rules. Refuses to go on if the wallet is on a different chain from Agon. */
 export async function signing() {
   const s = await get("/league/v1/signing"), w = await wallet();
   const chain = await w.publicClient.getChainId();

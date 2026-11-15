@@ -59,7 +59,7 @@ for (const a of AGENTS) {
   let sent = 0, refused = 0; const why = new Map<string, number>();
   for (const fx of fixtures) {
     if (!fx.probabilities) continue;
-    const message = { market: fx.market, probabilities: toBps(a.f(fx.probabilities)), issuedAt: now(), visibility: a.visibility, reasoningHash: ZERO32, receiptHash: ZERO32 };
+    const message = { market: fx.market, probabilities: toBps(a.f(fx.probabilities)), issuedAt: now(), visibility: a.visibility, reasoningHash: ZERO32, receiptHash: ZERO32, salt: "0x" + [...crypto.getRandomValues(new Uint8Array(32))].map((b) => b.toString(16).padStart(2, "0")).join("") };
     const signature = await account.signTypedData({ domain, types, primaryType: "Forecast", message: { ...message, issuedAt: BigInt(message.issuedAt) } });
     const res = await post("/league/v1/forecasts", { address: account.address, message, signature });
     if (res.ok) sent++; else { refused++; why.set(res.body.error, (why.get(res.body.error) ?? 0) + 1); }

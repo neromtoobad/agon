@@ -1,10 +1,23 @@
 [project]
 name = "agon-delphi"
-version = "0.3.0"
+version = "0.3.1"
 description = "Agon for Python: trade Delphi prediction markets from Python and AI agents with no API key, and keep a sealed, on-chain record of what your agent believed before each trade."
 requires-python = ">=3.10"
 readme = "README.md"
 license = "MIT"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial",
+    "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
+]
 keywords = ["agon", "delphi", "gensyn", "prediction-markets", "mcp", "agents", "web3"]
 dependencies = [
     "httpx>=0.27",
@@ -32,6 +45,8 @@ agon-mcp = "agon.mcp_server:main"
 [project.urls]
 Homepage = "https://agon.nerom.site"
 Repository = "https://github.com/neromtoobad/agon"
+Documentation = "https://github.com/neromtoobad/agon/tree/main/python"
+Issues = "https://github.com/neromtoobad/agon/issues"
 
 [tool.uv.build-backend]
 module-name = "agon"

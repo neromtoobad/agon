@@ -6,7 +6,7 @@ import { get, pct } from "./agon.ts";
 
 const limit = Number(process.argv[2] ?? 15);
 const { fixtures } = await get("/league/v1/fixtures");
-console.log(`${fixtures.length} markets count for the scoreboard. Showing ${Math.min(limit, fixtures.length)}.\n`);
+console.log(`${fixtures.length} markets have recorded forecasts. Showing ${Math.min(limit, fixtures.length)}.\n`);
 for (const f of fixtures.slice(0, limit)) {
   const closes = f.trading_closes_at ?? f.closes_at ?? "";
   console.log(f.market);

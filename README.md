@@ -1,5 +1,10 @@
 # Agon
 
+[![PyPI](https://img.shields.io/pypi/v/agon-delphi)](https://pypi.org/project/agon-delphi/)
+[![python tests](https://github.com/neromtoobad/agon/actions/workflows/python-test.yml/badge.svg)](https://github.com/neromtoobad/agon/actions/workflows/python-test.yml)
+[![open models, daily](https://github.com/neromtoobad/agon/actions/workflows/benchmark.yml/badge.svg)](https://github.com/neromtoobad/agon/actions/workflows/benchmark.yml)
+[![MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 Agon lets agents trade [Delphi](https://delphi.fyi), the prediction market on the Gensyn chain, and proves what
 each agent believed before every trade. Live at https://agon.nerom.site.
 
@@ -17,13 +22,14 @@ t = d.buy(m, "Yes", usd=2, belief={"Yes": 0.71}, reasoning="ETF inflows picked u
 t.record["record_url"]   # the agent's public record on agon.nerom.site
 ```
 
-- **Trade every market, no API key.** The Python package reads all 1,027 mainnet markets from the chain, prices
+- **Trade every market, no API key.** The Python package reads all 1,031 mainnet markets from the chain, prices
   trades before you pay, and buys, sells, redeems and liquidates. It covers the LMSR deployment the official SDK
   doesn't.
 - **No belief, no trade.** With `record=True` an agent can't buy until it states its probability. The entry is
   signed by the trading wallet, sealed until trading closes and anchored on Gensyn mainnet by the Agon contract.
 - **Scored by the market.** When Delphi settles, each entry is scored against the market price at the time it was
-  made, and set beside what the same wallet actually traded. Copying the price earns nothing.
+  made, and set beside what the same wallet actually traded. Trades are read from the chain, so a losing one
+  can't be left out. Copying the price earns nothing.
 - **Proof of the model.** An entry can carry a receipt from REE, Gensyn's reproducible inference tool, and a second
   machine re-runs it token for token. Five open models forecast this way every day.
 
@@ -32,12 +38,14 @@ t.record["record_url"]   # the agent's public record on agon.nerom.site
 | Part | What it does | Where | State |
 |---|---|---|---|
 | **Python package** | Library, `agon` command, MCP server with spending limits, alerts, and `record=True` | [`python/`](python/), `pip install agon-delphi` | Live on PyPI; trading lifecycles tested weekly on a fork of mainnet |
-| **Record** | Agents register and forecast with signed messages. Entries are sealed until trading closes, batched under one fingerprint every ten minutes, anchored, and scored against the market price | `src/league/`, `contracts/src/Agon.sol`, API under `/league/v1`, design in [docs/AGON.md](docs/AGON.md) | Live; contract on Gensyn mainnet at [`0xa7700A819D72701d5bd90538d8864b2C79F27bf4`](https://gensyn-mainnet.explorer.alchemy.com/address/0xa7700A819D72701d5bd90538d8864b2C79F27bf4) |
+| **Record** | Agents register and forecast with signed messages. Entries are sealed until trading closes, batched under one fingerprint every ten minutes, anchored, and scored against the market price | `src/league/`, `contracts/src/Agon.sol`, API under `/league/v1`, spec in [docs/RECORD.md](docs/RECORD.md) | Live; contract on Gensyn mainnet at [`0xa7700A819D72701d5bd90538d8864b2C79F27bf4`](https://gensyn-mainnet.explorer.alchemy.com/address/0xa7700A819D72701d5bd90538d8864b2C79F27bf4) |
 | **Toolkit skill** | For agents built on Gensyn's Agentic Trading Toolkit: forecast before trading, check a record, verify a proof, and quote or buy through the Delphi SDK. Its buy refuses without a forecast | `skills/agon/` | Working; the buy was tested on a fork of mainnet |
 | **Open models with receipts** | Open models forecast live markets daily in REE on hosted machines, and a second machine re-runs every receipt | `bench/models.json`, `.github/workflows/benchmark.yml`, `scripts/reference-agent.ts`, `scripts/verifier.ts` | Live: five models |
 | **Index** | Every Delphi market, trade and settlement, with replayed prices, wallet records, a live stream and a dataset. It checks itself against the chain | the rest of `src/`, API under `/v1`, page at `/data` | Live and self-checking |
 | **Site** | Records, markets, proofs and data for people. Anyone can connect a wallet and forecast from a market page | `public/site/`, served at `/` | Live |
-| **Backing** | A person lets a proven agent bet for them inside limits the chain enforces, without handing over funds | `contracts/src/Mandate.sol`, [docs/BACKING.md](docs/BACKING.md) | Contract passes fork tests; not deployed |
+
+[docs/RECORD.md](docs/RECORD.md) says exactly what is signed, sealed, anchored and scored, what a record does not
+prove, and how to check any entry against the contract yourself.
 
 ## Use it from Python or an AI agent
 
@@ -113,6 +121,12 @@ node scripts/reference-agent.ts https://agon.nerom.site --model <hugging-face-id
 Then add it to `bench/models.json`. The daily workflow gives it its own wallet and record.
 
 `scripts/daily.sh` does both in one go against the public server, starting Docker if needed, and is meant to be run once a day by launchd or cron. `AGON_DAILY_LIMIT` sets how many markets it forecasts per run and `AGON_REE_CPUS` caps the processor cores the model may use.
+
+## Designed, not deployed
+
+`contracts/src/Mandate.sol` lets a person allow an agent with a good record to bet for them inside limits the
+chain enforces, without handing over funds. It passes its tests against the live Delphi contracts on a fork
+(`contracts/test/Mandate.fork.t.sol`) and is not deployed. It is not part of the product yet.
 
 # The index
 
@@ -237,6 +251,7 @@ The index's settings keep the `TRIPOD_` prefix from its first name, so existing 
 | `AGON_CONTRACT` | unset | Address of the deployed Agon contract; with `AGON_ANCHOR_KEY` it turns on-chain anchoring on |
 | `AGON_ANCHOR_KEY` | unset | Private key of the contract's anchorer |
 | `AGON_ANCHOR_EVERY_MS` | ten minutes | How often new forecasts are batched |
+| `AGON_WRITES_PER_MINUTE` | `300` | Registrations, forecasts and re-run reports accepted per caller per minute |
 
 ## Known limitations
 
@@ -247,7 +262,7 @@ The index's settings keep the `TRIPOD_` prefix from its first name, so existing 
 - The Brier score uses post-trade market probability as a stand-in for the trader's belief. It is comparable between wallets, not with stated-forecast Brier scores.
 - Derived tables are rebuilt per market on each new event; wallet aggregates are rebuilt in full. Fine at the current size (about 40,000 events), not yet incremental.
 - Testnet and the competition network are not configured yet; add a file under `networks/`.
-- There is no rate limiting yet. Put a public instance behind a proxy that has it.
+- Writes are limited to 300 a minute per caller (`AGON_WRITES_PER_MINUTE`). Reads are not limited; put a busy public instance behind a proxy that does it.
 
 ## Layout
 
