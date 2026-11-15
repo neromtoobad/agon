@@ -26,6 +26,12 @@ export const TYPES = {
     { name: "visibility", type: "uint8" }, { name: "reasoningHash", type: "bytes32" }, { name: "receiptHash", type: "bytes32" },
     { name: "salt", type: "bytes32" },
   ],
+  // A timelocked forecast: the agent signs this when it hands over the encrypted forecast. The forecast itself (signed as
+  // Forecast, with visibility 2) is inside the ciphertext, which drand's network lets anyone open at round `round`.
+  Locked: [
+    { name: "market", type: "address" }, { name: "leaf", type: "bytes32" }, { name: "round", type: "uint64" },
+    { name: "ciphertextHash", type: "bytes32" }, { name: "issuedAt", type: "uint64" },
+  ],
   Verification: [
     { name: "receiptHash", type: "bytes32" }, { name: "matched", type: "bool" }, { name: "outputHash", type: "bytes32" },
     { name: "reeVersion", type: "string" }, { name: "issuedAt", type: "uint64" },
@@ -77,7 +83,20 @@ CREATE TABLE IF NOT EXISTS league_scores (
 );
 `);
 
-if (!(db.prepare("PRAGMA table_info(league_forecasts)").all() as any[]).some((c) => c.name === "salt")) db.exec("ALTER TABLE league_forecasts ADD COLUMN salt TEXT");
+{
+  const have = new Set((db.prepare("PRAGMA table_info(league_forecasts)").all() as any[]).map((c) => c.name));
+  for (const [col, type] of [["salt", "TEXT"], ["lock_round", "INTEGER"], ["lock_ct", "TEXT"], ["lock_state", "TEXT"], ["lock_error", "TEXT"], ["lock_sig", "TEXT"]])
+    if (!have.has(col)) db.exec(`ALTER TABLE league_forecasts ADD COLUMN ${col} ${type}`);
+}
+// Every Committed(agent, leaf) event the Agon contract has emitted: an agent's own on-chain timestamp for a forecast,
+// written by its wallet before it trades, so the order of belief and trade does not rest on this server's clock.
+db.exec(`CREATE TABLE IF NOT EXISTS league_commits (
+  tx TEXT NOT NULL, log_index INTEGER NOT NULL, block INTEGER NOT NULL, ts INTEGER, agent TEXT NOT NULL, leaf TEXT NOT NULL,
+  PRIMARY KEY (tx, log_index)
+); CREATE INDEX IF NOT EXISTS lc_leaf ON league_commits(leaf, agent);`);
+
+/** Rows that hold a usable forecast: anything except a timelocked one that is still locked or could not be opened. */
+export const USABLE = "COALESCE(lock_state, 'opened') = 'opened'";
 
 export class Refused extends Error { status = 400; }
 const refuse = (m: string): never => { throw new Refused(m); };
@@ -251,14 +270,138 @@ export function receiptView(forecastId: number, withReceipt: boolean) {
 /** leaf = keccak256(typed-data digest ‖ agent address). Publishing it reveals nothing about the forecast. */
 export const leafOf = (digest: string, agent: string) => keccak256(concat([digest as Hex, agent as Hex]));
 
-/** What the public may see of a forecast right now. Sealed content appears once trading on its market has closed. */
+/** The first time this agent's own wallet put this forecast's leaf on chain, if it did. */
+export function commitOf(leaf: string, agent: string) {
+  const c = db.prepare("SELECT * FROM league_commits WHERE leaf = ? AND agent = ? ORDER BY block, log_index LIMIT 1").get(leaf, agent) as any;
+  return c ? { tx: c.tx, block: c.block, log_index: c.log_index, at: c.ts ? new Date(c.ts * 1000).toISOString() : null } : null;
+}
+
+/** What the public may see of a forecast right now. Sealed content appears once trading on its market has closed;
+ * timelocked content once drand has published its round and the server has opened it. */
 export function forecastView(f: any, deadline: number) {
-  const open = f.visibility === 1 || now() >= deadline;
+  const locked = f.visibility === 2;
+  const open = locked ? f.lock_state === "opened" : f.visibility === 1 || now() >= deadline;
   const v: any = { id: f.id, agent: f.agent, market: f.market, leaf: f.leaf, received_at: new Date(f.received_ts * 1000).toISOString(), sealed: !open, batch: f.batch };
+  if (locked) v.timelock = { round: f.lock_round, opens_at: new Date(roundTime(f.lock_round) * 1000).toISOString(), state: f.lock_state, ...(f.lock_error ? { error: f.lock_error } : {}), ciphertext_url: `/league/v1/forecasts/${f.id}/ciphertext` };
   if (open) Object.assign(v, { probabilities: (JSON.parse(f.probs) as number[]).map((p) => p / 10000), issued_at: f.issued_at, visibility: f.visibility, reasoning: f.reasoning, reasoning_hash: f.reasoning_hash, receipt_hash: f.receipt_hash, salt: f.salt ?? null, digest: f.digest, signature: f.signature });
+  if (locked && f.lock_state === "failed") v.sealed = false;
+  const c = commitOf(f.leaf, f.agent);
+  if (c) v.commit = c;
   const rc = receiptView(f.id, open);
   if (rc) v.receipt = rc;
   return v;
+}
+
+// ───────────────────────── timelocked forecasts
+
+/** drand quicknet: the network tlock uses. A round every 3 seconds; its signature is the key for that round. */
+export const DRAND = { chainHash: "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971", genesis: 1692803367, period: 3 } as const;
+export const roundAt = (t: number) => Math.max(1, Math.ceil((t - DRAND.genesis) / DRAND.period) + 1); // first round at or after t
+export const roundTime = (r: number) => DRAND.genesis + (r - 1) * DRAND.period;
+const MAX_CIPHERTEXT = 24000;
+
+/** The round and network a tlock ciphertext opens at, read from its age header. */
+function tlockHeader(armored: string): { round: number; chain: string } | null {
+  const s = armored.trim(), head = "-----BEGIN AGE ENCRYPTED FILE-----", foot = "-----END AGE ENCRYPTED FILE-----";
+  if (!s.startsWith(head) || !s.endsWith(foot)) return null;
+  const raw = Buffer.from(s.slice(head.length, -foot.length).replace(/\s+/g, ""), "base64").toString("latin1");
+  const line = raw.split("\n").find((l) => l.startsWith("-> tlock "));
+  if (!raw.startsWith("age-encryption.org/v1\n") || !line) return null;
+  const [, , round, chain] = line.split(" ");
+  return { round: Number(round), chain };
+}
+
+/**
+ * A timelocked forecast. The agent encrypts its signed forecast to the drand round at trading close and sends only
+ * the ciphertext, the forecast's leaf, and a signature over both. This server cannot read it: nobody can until drand
+ * publishes that round, after which anyone can (tlock-js, the Go `tle` tool, or agon-delphi's Python).
+ * Everything that needs the content (signature, probabilities, leaf) is checked when it opens. One that fails is
+ * kept and shown as "could not be opened"; it never counts as a forecast.
+ */
+export async function submitLocked(input: { address: string; locked: any; signature: string; ciphertext: string }) {
+  const { address, locked: m, signature, ciphertext } = input ?? ({} as any);
+  if (!address || !isAddress(address)) refuse("address is missing or malformed");
+  const a = lc(address);
+  if (!db.prepare("SELECT 1 FROM league_agents WHERE address = ?").get(a)) refuse("this address is not a registered agent");
+  if (!m || !isAddress(m.market ?? "")) refuse("locked.market is missing or malformed");
+  const market = lc(m.market), mk = fixture(market);
+  if (!mk) refuse("forecasts on this market are not recorded: it was open for under 12 hours, or its text does not match the chain");
+  const t = now();
+  if (mk.status !== "open" || t >= mk.trading_deadline) refuse("trading on this market has closed");
+  if (typeof ciphertext !== "string" || ciphertext.length > MAX_CIPHERTEXT) refuse(`ciphertext must be an armored tlock file of at most ${MAX_CIPHERTEXT} characters`);
+  const h = tlockHeader(ciphertext);
+  if (!h) refuse("ciphertext is not an armored tlock (age) file");
+  if (h!.chain !== DRAND.chainHash) refuse("ciphertext must be locked to drand quicknet");
+  const round = Number(m.round), want = roundAt(mk.trading_deadline);
+  if (h!.round !== round) refuse("locked.round is not the round in the ciphertext");
+  // It must open when trading closes: not before (that would reveal it early), and not long after (it has to be scored).
+  if (round < want || round > want + 200) refuse(`lock it to drand round ${want}, the first one at or after trading closes`);
+  if (!/^0x[0-9a-fA-F]{64}$/.test(m.leaf ?? "")) refuse("locked.leaf must be 32 bytes");
+  if (keccak256(toHex(ciphertext)) !== String(m.ciphertextHash).toLowerCase()) refuse("locked.ciphertextHash is not the hash of the ciphertext");
+  const issuedAt = Number(m.issuedAt);
+  if (!Number.isFinite(issuedAt) || Math.abs(issuedAt - t) > CLOCK_SKEW) refuse("issuedAt must be within ten minutes of now");
+  const msg = { market: m.market as Hex, leaf: m.leaf as Hex, round: BigInt(round), ciphertextHash: m.ciphertextHash as Hex, issuedAt: BigInt(issuedAt) };
+  const ok = await verifyTypedData({ address: address as Hex, domain: DOMAIN, types: TYPES, primaryType: "Locked", message: msg, signature: signature as Hex }).catch(() => false);
+  if (!ok) refuse("signature does not match this address and message");
+  const last = db.prepare("SELECT received_ts t FROM league_forecasts WHERE agent = ? AND market = ? ORDER BY id DESC LIMIT 1").get(a, market) as any;
+  if (last && t - last.t < 60) refuse("wait a minute between forecasts on the same market");
+  const leaf = String(m.leaf).toLowerCase();
+  if (db.prepare("SELECT 1 FROM league_forecasts WHERE leaf = ?").get(leaf)) refuse("this exact forecast was already received");
+  const r = db.prepare(`INSERT INTO league_forecasts(agent, market, probs, issued_at, received_ts, visibility, reasoning, reasoning_hash, receipt_hash, digest, leaf, signature, lock_round, lock_ct, lock_state, lock_sig)
+    VALUES(?,?,'[]',?,?,2,NULL,?,?,?,?,'',?,?,'locked',?)`).run(a, market, issuedAt, t, ZERO32, ZERO32, ZERO32, leaf, round, ciphertext, signature);
+  const id = Number(r.lastInsertRowid);
+  return { id, leaf, digest: null, received_at: new Date(t * 1000).toISOString(), sealed_until: new Date(roundTime(round) * 1000).toISOString(), timelock: { round, opens_at: new Date(roundTime(round) * 1000).toISOString() }, receipt: null };
+}
+
+/** Check a decrypted timelocked forecast. Returns the fields to store, or the reason it fails. */
+export async function checkOpened(row: any, plaintext: string): Promise<{ ok: true; set: any } | { ok: false; error: string }> {
+  let body: any;
+  try { body = JSON.parse(plaintext); } catch { return { ok: false, error: "the decrypted text is not JSON" }; }
+  const m = body?.message, mk = db.prepare("SELECT outcome_count FROM markets WHERE address = ?").get(row.market) as any;
+  if (!m || typeof m !== "object") return { ok: false, error: "no signed forecast inside" };
+  if (!isAddress(m.market ?? "") || lc(m.market) !== row.market) return { ok: false, error: "the forecast inside is for a different market" };
+  if (Number(m.visibility) !== 2) return { ok: false, error: "the forecast inside does not say it is timelocked (visibility 2)" };
+  if (Number(m.issuedAt) !== row.issued_at) return { ok: false, error: "the forecast inside has a different issuedAt from the one signed when it was handed over" };
+  const probs: number[] = Array.isArray(m.probabilities) ? m.probabilities.map(Number) : [];
+  if (probs.length !== mk?.outcome_count || probs.some((p) => !Number.isInteger(p) || p < 100 || p > 9900) || probs.reduce((x, y) => x + y, 0) !== 10000) return { ok: false, error: "the probabilities inside break the rules (100 to 9900 basis points each, adding up to 10000)" };
+  if (!/^0x[0-9a-fA-F]{64}$/.test(m.salt ?? "") || /^0x0{64}$/.test(m.salt)) return { ok: false, error: "no salt inside" };
+  if (m.receiptHash !== ZERO32) return { ok: false, error: "timelocked forecasts cannot carry receipts" };
+  const reasoning = body.reasoning ?? null;
+  if (reasoning != null && (typeof reasoning !== "string" || reasoning.length > 4000 || keccak256(toHex(reasoning)) !== String(m.reasoningHash).toLowerCase())) return { ok: false, error: "the reasoning inside does not match its hash" };
+  if (reasoning == null && m.reasoningHash !== ZERO32) return { ok: false, error: "reasoningHash is set but there is no reasoning inside" };
+  const msg = { market: m.market as Hex, probabilities: probs, issuedAt: BigInt(row.issued_at), visibility: 2, reasoningHash: m.reasoningHash as Hex, receiptHash: ZERO32, salt: String(m.salt).toLowerCase() as Hex };
+  const ok = await verifyTypedData({ address: row.agent as Hex, domain: DOMAIN, types: TYPES, primaryType: "Forecast", message: msg, signature: body.signature as Hex }).catch(() => false);
+  if (!ok) return { ok: false, error: "the signature inside is not this agent's" };
+  const digest = hashTypedData({ domain: DOMAIN, types: TYPES, primaryType: "Forecast", message: msg });
+  if (leafOf(digest, row.agent).toLowerCase() !== row.leaf) return { ok: false, error: "the forecast inside does not hash to the leaf that was anchored" };
+  return { ok: true, set: { probs: JSON.stringify(probs), reasoning, reasoning_hash: String(m.reasoningHash).toLowerCase(), digest, signature: body.signature, salt: msg.salt } };
+}
+
+/** Open every timelocked forecast whose drand round has been published. Safe to run any time; returns how many it opened. */
+export async function openLocked(log?: (s: string) => void) {
+  const due = db.prepare("SELECT * FROM league_forecasts WHERE lock_state = 'locked' AND lock_round IS NOT NULL ORDER BY id").all() as any[];
+  const ready = due.filter((f) => roundTime(f.lock_round) <= now() - 3);
+  if (!ready.length) return { opened: 0, failed: 0, waiting: due.length };
+  const { timelockDecrypt, mainnetClient } = await import("tlock-js");
+  const client = mainnetClient();
+  let opened = 0, failed = 0;
+  const touched = new Set<string>();
+  for (const f of ready) {
+    let plain: string;
+    try { plain = (await timelockDecrypt(f.lock_ct, client)).toString("utf8"); }
+    catch (e) {
+      const msg = String((e as Error).message ?? e);
+      // drand unreachable or the round not out yet: try again next time. Anything else is the ciphertext's fault.
+      if (/fetch|network|timed? ?out|ECONN|ENOTFOUND|429|5\d\d|not.*(yet|found)|too early/i.test(msg)) { log?.(`timelock ${f.id}: drand not ready (${msg.slice(0, 80)})`); continue; }
+      db.prepare("UPDATE league_forecasts SET lock_state = 'failed', lock_error = ? WHERE id = ?").run(`could not decrypt: ${msg.slice(0, 160)}`, f.id); failed++; continue;
+    }
+    const r = await checkOpened(f, plain);
+    if (r.ok) { db.prepare("UPDATE league_forecasts SET probs = ?, reasoning = ?, reasoning_hash = ?, digest = ?, signature = ?, salt = ?, lock_state = 'opened', lock_error = NULL WHERE id = ?").run(r.set.probs, r.set.reasoning, r.set.reasoning_hash, r.set.digest, r.set.signature, r.set.salt, f.id); opened++; touched.add(f.market); }
+    else { db.prepare("UPDATE league_forecasts SET lock_state = 'failed', lock_error = ? WHERE id = ?").run(r.error, f.id); failed++; }
+  }
+  for (const mkt of touched) if ((db.prepare("SELECT status FROM markets WHERE address = ?").get(mkt) as any)?.status === "settled") scoreMarket(mkt);
+  if (opened || failed) log?.(`timelock: opened ${opened}, could not open ${failed}`);
+  return { opened, failed, waiting: due.length - opened - failed };
 }
 
 // ───────────────────────── Merkle batches
@@ -322,7 +465,7 @@ export function scoreMarket(address: string): number {
   if (!m || m.status !== "settled" || m.winning_outcome == null || !m.resolved_ts) return 0;
   const T: number = m.trading_deadline, t0: number = m.created_ts, w: number = m.winning_outcome, n: number = m.outcome_count;
   const path: [number, number[]][] = [[t0, Array(n).fill(1 / n)], ...(qPrices.all(address, T) as any[]).map((r) => [r.ts, JSON.parse(r.probs)] as [number, number[]])];
-  const fs = db.prepare("SELECT agent, probs, received_ts FROM league_forecasts WHERE market = ? AND received_ts < ? ORDER BY agent, received_ts, id").all(address, T) as any[];
+  const fs = db.prepare(`SELECT agent, probs, received_ts FROM league_forecasts WHERE market = ? AND received_ts < ? AND ${USABLE} ORDER BY agent, received_ts, id`).all(address, T) as any[];
   const by = new Map<string, any[]>();
   for (const f of fs) (by.get(f.agent) ?? by.set(f.agent, []).get(f.agent)!).push(f);
   const ins = db.prepare("INSERT INTO league_scores VALUES(?,?,?,?,?,?,?,?,?,?)");

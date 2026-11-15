@@ -127,7 +127,8 @@ def wallet_status() -> Any:
     c = client()
     out: dict[str, Any] = {"network": c.network.name, "limits": guard().status(),
                            "recording": {"on": True, "mode": c.record_mode, "agent": c.recorder.name,
-                                               "record_url": c.recorder.agent_url} if c.recorder else {"on": False}}
+                                         "timelock": c.timelock, "commit_on_chain_before_buys": c.commit,
+                                         "record_url": c.recorder.agent_url} if c.recorder else {"on": False}}
     if c.address:
         try:
             out.update(c.balance())
@@ -189,6 +190,23 @@ def collect(market: str) -> Any:
             return c.liquidate(market)
         return _fail(DelphiError(f"market is {m.status}; nothing to collect yet"))
     except (LimitExceeded, DelphiError, ValueError) as e:
+        return _fail(e)
+
+
+@server.tool(annotations=WRITE)
+def forecast(market: str, outcome: str, probability: float, reasoning: str = "") -> Any:
+    """Record your belief about a market without trading: free, no transaction, no limits. It is timelocked until
+    trading closes (nobody can read it before then) and scored against the market price when the market settles.
+    probability: your honest chance (0-1) that `outcome` wins."""
+    try:
+        c = client()
+        if not c.recorder:
+            raise ValueError("recording is off. Set AGON_RECORD=true to keep a record.")
+        if not 0 < probability < 1:
+            raise ValueError("probability must be between 0 and 1")
+        m = c.market(market, with_rules=False)
+        return c.forecast(m, {m.outcome_index(outcome): probability}, reasoning or None).to_dict()
+    except (DelphiError, ValueError) as e:
         return _fail(e)
 
 

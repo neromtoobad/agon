@@ -1,8 +1,9 @@
-import { createWalletClient, createPublicClient, http, defineChain, parseAbi, type Hex } from "viem";
+import { createWalletClient, createPublicClient, http, defineChain, parseAbi, decodeEventLog, toEventSelector, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { db } from "../db.ts";
+import { db, getMeta, setMeta } from "../db.ts";
+import { logsByTopic, headBlock } from "../sources/logs.ts";
 import { network, lc } from "../config.ts";
-import { buildBatch } from "./core.ts";
+import { buildBatch, Refused } from "./core.ts";
 
 /**
  * Puts batch roots on chain. Anchoring is optional at runtime: without a contract address and a funded key
@@ -19,7 +20,10 @@ export const AGON_ABI = parseAbi([
   "function verify(uint256 id, bytes32 leaf, bytes32[] proof) view returns (bool)",
   "function anchorer() view returns (address)",
   "event Anchored(uint256 indexed batch, bytes32 root, uint32 count)",
+  "event Committed(address indexed agent, bytes32 leaf)",
+  "function commit(bytes32 leaf)",
 ]);
+const COMMITTED = toEventSelector("event Committed(address indexed agent, bytes32 leaf)");
 
 const CONTRACT = process.env.AGON_CONTRACT as Hex | undefined;
 const KEY = process.env.AGON_ANCHOR_KEY as Hex | undefined;
@@ -47,4 +51,52 @@ export async function anchorPending(log?: (s: string) => void) {
     n++;
   }
   return { built, anchored: n };
+}
+
+// ───────────────────────── commits an agent makes itself
+
+const saveCommit = db.prepare("INSERT OR IGNORE INTO league_commits(tx, log_index, block, ts, agent, leaf) VALUES(?,?,?,?,?,?)");
+
+/**
+ * Read Committed(agent, leaf) events from the Agon contract, from where the last scan stopped to the chain head.
+ * An agent's wallet calls commit(leaf) just before it trades; the block that holds it dates the forecast on chain,
+ * without relying on this server's clock or its ten-minute batches.
+ */
+export async function scanCommits(log?: (s: string) => void) {
+  if (!CONTRACT) return { seen: 0 };
+  const head = await headBlock();
+  const first = Number(process.env.AGON_CONTRACT_BLOCK ?? (db.prepare("SELECT MIN(block) b FROM league_batches WHERE block IS NOT NULL").get() as any)?.b ?? head) - 5000;
+  const from = Number(getMeta("commit_scan_block") ?? Math.max(0, first));
+  let seen = 0;
+  for await (const rows of logsByTopic(COMMITTED, from, head, "explorer")) {
+    for (const r of rows) {
+      if (r.address !== lc(CONTRACT)) continue;
+      const ev = decodeEventLog({ abi: AGON_ABI, data: r.data as Hex, topics: r.topics as [Hex, ...Hex[]] }) as any;
+      saveCommit.run(r.transactionHash.toLowerCase(), r.logIndex, r.blockNumber, r.timestamp || null, lc(ev.args.agent), String(ev.args.leaf).toLowerCase());
+      seen++;
+    }
+  }
+  setMeta("commit_scan_block", String(Math.max(from, head - 50))); // re-read the last few blocks next time, in case the explorer lags
+  if (seen) log?.(`commits: ${seen} seen up to block ${head}`);
+  return { seen };
+}
+
+/** Record the commit in one transaction now, rather than waiting for the next scan. Anyone may report one: it is checked on chain. */
+export async function reportCommit(forecastId: number, txHash: string) {
+  if (!CONTRACT) throw new Refused("this server has no Agon contract configured");
+  if (!/^0x[0-9a-fA-F]{64}$/.test(txHash ?? "")) throw new Refused("tx must be a transaction hash");
+  const f = db.prepare("SELECT id, agent, leaf FROM league_forecasts WHERE id = ?").get(forecastId) as any;
+  if (!f) throw Object.assign(new Refused("no such forecast"), { status: 404 });
+  const pub = agonPublic();
+  const rc = await pub.getTransactionReceipt({ hash: txHash as Hex }).catch(() => null);
+  if (!rc) throw new Refused("that transaction is not on chain yet");
+  if (rc.status !== "success") throw new Refused("that transaction reverted");
+  const hit = rc.logs.find((l) => lc(l.address) === lc(CONTRACT) && l.topics[0] === COMMITTED && (() => {
+    const ev = decodeEventLog({ abi: AGON_ABI, data: l.data, topics: l.topics as [Hex, ...Hex[]] }) as any;
+    return lc(ev.args.agent) === f.agent && String(ev.args.leaf).toLowerCase() === f.leaf;
+  })());
+  if (!hit) throw new Refused("that transaction has no commit of this forecast's leaf by this agent");
+  const blk = await pub.getBlock({ blockNumber: rc.blockNumber });
+  saveCommit.run(txHash.toLowerCase(), Number(hit.logIndex), Number(rc.blockNumber), Number(blk.timestamp), f.agent, f.leaf);
+  return { forecast: f.id, tx: txHash.toLowerCase(), block: Number(rc.blockNumber), at: new Date(Number(blk.timestamp) * 1000).toISOString() };
 }

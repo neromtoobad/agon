@@ -17,7 +17,8 @@ import { marketView, eventView, iso, J } from "./views.ts";
 import { resolvedRecords, toCsv, toJsonl } from "./export.ts";
 import { mountLeague } from "./league/api.ts";
 import { scoreAll } from "./league/core.ts";
-import { anchorPending } from "./league/anchor.ts";
+import { anchorPending, scanCommits } from "./league/anchor.ts";
+import { openLocked } from "./league/core.ts";
 import { quoteBudget } from "./delphi.ts";
 
 const app = new Hono();
@@ -349,9 +350,16 @@ export async function serve(opts: { live: boolean }) {
   // League housekeeping: batch new forecasts and put roots on chain (when an anchorer is configured).
   const anchorLoop = async () => {
     try { await anchorPending((m) => console.log(m)); } catch (e) { console.error("anchor failed:", (e as Error).message); }
+    try { await scanCommits((m) => console.log(m)); } catch (e) { console.error("commit scan failed:", (e as Error).message); }
     setTimeout(anchorLoop, ANCHOR_EVERY_MS);
   };
   setTimeout(anchorLoop, 20_000);
+  // Timelocked forecasts open as soon as drand publishes their round, so check every minute (cheap when none are due).
+  const openLoop = async () => {
+    try { await openLocked((m) => console.log(m)); } catch (e) { console.error("timelock opening failed:", (e as Error).message); }
+    setTimeout(openLoop, 60_000);
+  };
+  setTimeout(openLoop, 30_000);
   scoreAll();
   setTimeout(runVerify, 60_000);
   setInterval(runVerify, VERIFY_EVERY_MS);

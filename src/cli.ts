@@ -37,6 +37,6 @@ if (cmd === "sync") {
   const m = await import("./commands.ts");
   await (m as any)[cmd](process.argv.slice(3));
 } else {
-  log("usage: node src/cli.ts <sync|derive|repair|audit|verify|serve|start|export|status|league anchor|league score>");
+  log("usage: node src/cli.ts <sync|derive|repair|audit|verify|serve|start|export|status|league anchor|league score|league open|league commits>");
   process.exit(1);
 }

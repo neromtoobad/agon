@@ -1,10 +1,12 @@
 """Command line: `agon markets`, `agon search`, `agon market`, `agon quote`, `agon buy`, `agon sell`,
-`agon positions`, `agon collect`, `agon balance`, `agon record`, `agon watch`."""
+`agon positions`, `agon collect`, `agon balance`, `agon forecast`, `agon record`, `agon badge`, `agon watch`,
+`agon open`."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
 from .client import Delphi, DelphiError
@@ -64,6 +66,15 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--record", action="store_true", help="record: seal --belief on Agon before buying")
     s.add_argument("--belief", type=float, help="your probability (0-1) that this outcome wins")
     s.add_argument("--reason", default=None, help="why, sealed with the belief")
+    s.add_argument("--no-timelock", action="store_true", help="let Agon's server seal the belief instead of timelocking it")
+    s.add_argument("--no-commit", action="store_true", help="skip putting the belief's fingerprint on chain before the buy")
+
+    s = sub.add_parser("forecast", help="record a belief without trading: free, timelocked until trading closes")
+    s.add_argument("address")
+    s.add_argument("outcome")
+    s.add_argument("belief", type=float, help="your probability (0-1) that this outcome wins")
+    s.add_argument("--reason", default=None)
+    s.add_argument("--public", action="store_true", help="visible straight away instead of timelocked")
 
     s = sub.add_parser("sell", help="sell shares (needs AGON_PRIVATE_KEY)")
     s.add_argument("address")
@@ -83,6 +94,12 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("record", help="an agent's record on Agon: what it said before trading, what it traded, how it scored")
     s.add_argument("wallet", nargs="?", help="defaults to your own wallet")
 
+    s = sub.add_parser("badge", help="Markdown for a README badge that shows an agent's record")
+    s.add_argument("wallet", nargs="?", help="defaults to your own wallet")
+
+    s = sub.add_parser("open", help="decrypt a timelocked entry yourself, once drand has published its round")
+    s.add_argument("entry", type=int, help="the entry id")
+
     s = sub.add_parser("watch", help="alerts: new markets, big moves, closing soon, settlements, money to collect")
     s.add_argument("--every", type=float, default=60, help="seconds between checks")
     s.add_argument("--move", type=float, default=0.10, help="alert on probability moves of this size (0.10 = 10 points)")
@@ -99,7 +116,8 @@ def main(argv: list[str] | None = None) -> int:
     import os
     record = getattr(a, "record", False) or os.environ.get("AGON_RECORD", "").lower() in ("1", "true", "yes")
     try:
-        d = Delphi(a.network or os.environ.get("AGON_NETWORK", "mainnet"), record=record if a.cmd == "buy" else False)
+        d = Delphi(a.network or os.environ.get("AGON_NETWORK", "mainnet"), record=True if a.cmd == "forecast" else record if a.cmd == "buy" else False,
+                   timelock=False if getattr(a, "no_timelock", False) else None, commit=False if getattr(a, "no_commit", False) else None)
         return _run(d, a)
     except (DelphiError, ValueError, RecorderError) as e:
         print(f"error: {e}", file=sys.stderr)
@@ -163,8 +181,46 @@ def _run(d: Delphi, a) -> int:
         else:
             print(f"bought {t.shares:.4f} {t.outcome_label} for ${t.usd:.4f}\n{t.explorer_url}")
             if t.record and t.record.get("logged"):
-                print(f"belief {t.record['belief']:.0%} vs market {t.record['market_probability']:.0%}, sealed until "
-                      f"{t.record['sealed_until']}\nrecord: {t.record['record_url']}")
+                how = "timelocked (nobody can read it) until" if t.record.get("timelocked") else "sealed until"
+                print(f"belief {t.record['belief']:.0%} vs market {t.record['market_probability']:.0%}, {how} "
+                      f"{t.record['sealed_until']}")
+                if t.record.get("commit_url"):
+                    print(f"committed on chain before the buy: {t.record['commit_url']}")
+                print(f"record: {t.record['record_url']}")
+        return 0
+    if a.cmd == "forecast":
+        m = d.market(a.address, with_rules=False)
+        idx = m.outcome_index(a.outcome)
+        e = d.forecast(m, {idx: a.belief}, a.reason, public=a.public)
+        if a.json:
+            _out(e.to_dict(), True)
+        else:
+            how = "public now" if a.public else f"timelocked until {e.sealed_until}: nobody, Agon included, can read it before then"
+            print(f"entry {e.id}: {m.outcomes[idx]} {a.belief:.0%} on {m.question}\n  {how}\n  {e.url}")
+        return 0
+    if a.cmd == "badge":
+        from .recorder import DEFAULT_URL
+        wallet = (a.wallet or d.address or "").lower()
+        if not wallet:
+            raise DelphiError("give a wallet address, or set AGON_PRIVATE_KEY to use your own")
+        base = (os.environ.get("AGON_URL") or DEFAULT_URL).rstrip("/")
+        md = f"[![Agon record]({base}/league/v1/agents/{wallet}/badge.svg)]({base}/#/agent/{wallet})"
+        _out({"markdown": md}, True) if a.json else print(md)
+        return 0
+    if a.cmd == "open":
+        import httpx
+        from . import tlock
+        from .recorder import DEFAULT_URL
+        base = (os.environ.get("AGON_URL") or DEFAULT_URL).rstrip("/")
+        r = httpx.get(f"{base}/league/v1/forecasts/{a.entry}/ciphertext", timeout=30, headers={"user-agent": "agon"})
+        if r.status_code != 200:
+            raise DelphiError(f"entry {a.entry} is not timelocked (or does not exist)")
+        rnd, _ = tlock.parse(r.text)
+        wait = tlock.seconds_until(rnd)
+        if wait > 0:
+            raise DelphiError(f"drand round {rnd} is {wait / 3600:.1f} hours away; nobody can open it before then")
+        inner = json.loads(tlock.decrypt(r.text))
+        _out(inner, True) if a.json else print(json.dumps(inner, indent=2))
         return 0
     if a.cmd == "sell":
         if not _confirm(f"Sell {'all' if a.shares is None else a.shares} {a.outcome} shares?", a.yes):
@@ -209,6 +265,8 @@ def _run(d: Delphi, a) -> int:
         s = rec.get("summary") or {}
         print(f"{rec['name']}  {rec['address']}")
         print(f"  buys with a forecast on record first: {s['buys_with_belief']} of {s['buys']}" if s.get("buys") else "  no trades by this wallet yet")
+        if s.get("buys"):
+            print(f"  buys whose forecast the wallet committed on chain first: {s.get('buys_committed_first', 0)} of {s['buys']}")
         print(f"  forecasts: {len(rec['forecasts'])} on {s.get('markets_forecast', 0)} markets, {s.get('sealed_now', 0)} sealed now")
         if rec.get("scored_markets"):
             print(f"  points: {rec['points']:+.1f} over {rec['scored_markets']} settled markets"
@@ -218,8 +276,10 @@ def _run(d: Delphi, a) -> int:
             print(f"  traded: ${s['spent_usd']:.2f} across {s['traded_markets']} markets{pnl}")
         for m in (rec.get("markets") or [])[:25]:
             f, then, outs = m["latest"], m.get("market_probabilities_then") or [], m.get("outcomes") or []
-            if f.get("sealed"):
-                said = "sealed until close"
+            if f.get("timelock", {}).get("state") == "failed":
+                said = "could not be opened: " + f["timelock"].get("error", "")
+            elif f.get("sealed"):
+                said = "timelocked until close" if f.get("timelock") else "sealed until close"
             else:
                 k = max(range(len(f["probabilities"])), key=lambda i: f["probabilities"][i])
                 said = f"{outs[k] if k < len(outs) else k} {f['probabilities'][k]:.0%}" + (f" (market then {then[k]:.0%})" if then else "")

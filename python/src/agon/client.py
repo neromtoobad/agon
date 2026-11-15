@@ -57,10 +57,17 @@ class Delphi:
 
     def __init__(self, network: str | Network = "mainnet", *, private_key: str | None = None,
                  rpc_url: str | None = None, cache: bool = True, record: bool | str = False,
-                 recorder_url: str | None = None, agent_name: str | None = None, agent_model: str = ""):
+                 recorder_url: str | None = None, agent_name: str | None = None, agent_model: str = "",
+                 timelock: bool | None = None, commit: bool | None = None):
         """``record=True`` turns on recording: every buy must state what the agent believes, and that
-        belief is sealed and anchored on chain (via Agon) before the trade is sent. No entry, no trade.
-        ``record="try"`` trades even if the entry can't be logged, and says why on the Trade."""
+        belief is recorded and anchored on chain (via Agon) before the trade is sent. No entry, no trade.
+        ``record="try"`` trades even if the entry can't be logged, and says why on the Trade.
+
+        With recording on, by default:
+        - ``timelock=True``: each entry is encrypted to the drand round at which its market stops trading, so
+          nobody, Agon's server included, can read it before then (env ``AGON_TIMELOCK=false`` turns it off);
+        - ``commit=True``: before each buy the trading wallet calls ``commit(leaf)`` on the Agon contract, so the
+          chain itself shows the belief came first (a little gas; env ``AGON_COMMIT=false`` turns it off)."""
         self.network = network if isinstance(network, Network) else get_network(network)
         self.w3 = connect(self.network, rpc_url or os.environ.get("AGON_RPC_URL"))
         self.reader = Reader(self.w3, self.network)
@@ -85,6 +92,9 @@ class Delphi:
             from .recorder import Recorder
             self.recorder = Recorder(key, url=recorder_url, name=agent_name, model=agent_model, chain_id=self.network.chain_id)
             self.record_mode = "try" if record == "try" else "required"
+        on = lambda v, env: v if v is not None else os.environ.get(env, "true").strip().lower() not in ("0", "false", "no", "off")
+        self.timelock = bool(self.recorder) and on(timelock, "AGON_TIMELOCK")
+        self.commit = bool(self.recorder) and on(commit, "AGON_COMMIT")
 
     # ------------------------------------------------------------------ wallet
 
@@ -472,6 +482,8 @@ class Delphi:
         sim = fn.call({"from": acct.address})
         # log the belief last, once the trade is known to go through, so a buy that would fail leaves no entry
         rec = self._log_belief(m, idx, belief, reasoning, receipt) if self.recorder else None
+        if rec and rec.get("logged") and self.commit:
+            rec.update(self._commit_entry(rec))
         r = self._send(fn)
         paid = int(sim[0] if isinstance(sim, (list, tuple)) else sim)
         h = "0x" + r["transactionHash"].hex().removeprefix("0x")
@@ -485,14 +497,45 @@ class Delphi:
         vec = belief_vector(m, belief)
         mine, theirs = vec[idx] / (sum(vec) or 1), (m.probabilities[idx] if idx < len(m.probabilities) else None)
         try:
-            e = self.recorder.log(m, vec, reasoning, receipt=receipt)
+            e = self.recorder.log(m, vec, reasoning, receipt=receipt, timelock=self.timelock and receipt is None)
         except (RecorderError, ValueError) as err:
             if self.record_mode == "try":
                 return {"logged": False, "error": str(err)}
             raise DelphiError(f"not traded: the belief could not be recorded ({err})") from None
-        return {"logged": True, "entry": e.id, "belief": round(mine, 4), "market_probability": theirs,
+        return {"logged": True, "entry": e.id, "leaf": e.leaf, "belief": round(mine, 4), "market_probability": theirs,
                 "edge": round(mine - theirs, 4) if theirs is not None else None, "sealed_until": e.sealed_until,
-                "record_url": e.url, "proof_url": e.proof_url}
+                "timelocked": e.timelocked, "record_url": e.url, "proof_url": e.proof_url}
+
+    def _commit_entry(self, rec: dict) -> dict:
+        """Put the entry's leaf on chain from the trading wallet, before the buy. Raises (so nothing is traded)
+        unless record="try"."""
+        from .recorder import AGON_ABI, AGON_CONTRACT, RecorderError
+        try:
+            agon = self.w3.eth.contract(address=checksum(AGON_CONTRACT), abi=AGON_ABI)
+            r = self._send(agon.functions.commit(bytes.fromhex(rec["leaf"].removeprefix("0x"))))
+        except Exception as err:  # noqa: BLE001 - any failure here means the belief is not on chain before the trade
+            if self.record_mode == "try":
+                return {"commit_error": str(err)}
+            raise DelphiError(f"not traded: the entry was logged but could not be committed on chain ({err}); "
+                              "pass commit=False to trade without the on-chain commit") from None
+        h = "0x" + r["transactionHash"].hex().removeprefix("0x")
+        try:
+            self.recorder.report_commit(rec["entry"], h)
+        except RecorderError:
+            pass  # Agon's scanner picks it up within ten minutes anyway
+        return {"commit_tx": h, "commit_url": self.tx_url(h), "commit_block": r["blockNumber"]}
+
+    def forecast(self, market: str | Market, belief, reasoning: str | None = None, *, public: bool = False):
+        """Record a belief without trading: free, nothing is sent on chain. Timelocked unless ``public``.
+        Needs ``record=True``. Returns the Entry."""
+        if not self.recorder:
+            raise DelphiError("forecast() needs Delphi(record=True, private_key=...)")
+        m = market if isinstance(market, Market) else self.market(market)
+        from .recorder import RecorderError
+        try:
+            return self.recorder.log(m, belief, reasoning, public=public, timelock=self.timelock and not public)
+        except RecorderError as err:
+            raise DelphiError(f"not recorded: {err}") from None
 
     def sell(self, market: str | Market, outcome: int | str, shares: float | None = None, *,
              max_slippage: float = 0.02) -> Trade:

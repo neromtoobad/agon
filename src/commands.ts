@@ -34,5 +34,7 @@ export async function league(args: string[]) {
   const sub = args[0] ?? "status";
   if (sub === "anchor") { const r = await anchorPending(log); log(`built ${r.built ? 1 : 0} batch, put ${r.anchored} on chain${anchoring().configured ? "" : " (no contract or key configured, so roots stay off chain)"}`); }
   else if (sub === "score") log(JSON.stringify(core.scoreAll()));
+  else if (sub === "open") log(JSON.stringify(await core.openLocked(log)));
+  else if (sub === "commits") log(JSON.stringify(await (await import("./league/anchor.ts")).scanCommits(log)));
   else { const one = (q: string) => Object.values(db.prepare(q).get() as any)[0]; log(`agents ${one("SELECT COUNT(*) FROM league_agents")} · forecasts ${one("SELECT COUNT(*) FROM league_forecasts")} · batches ${one("SELECT COUNT(*) FROM league_batches")} (on chain ${one("SELECT COALESCE(SUM(anchored),0) FROM league_batches")}) · scores ${one("SELECT COUNT(*) FROM league_scores")} · open fixtures ${core.openFixtures().length}`); }
 }

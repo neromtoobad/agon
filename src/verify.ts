@@ -99,15 +99,22 @@ export async function verify(args: string[] = []) {
   const lg = await import("./league/core.ts"), an = await import("./league/anchor.ts"), { verifyTypedData, hashTypedData } = await import("viem");
   const fs = db.prepare("SELECT * FROM league_forecasts ORDER BY id").all() as any[];
   if (fs.length) {
-    let badSig = 0, badLeaf = 0;
+    let badSig = 0, badLeaf = 0, badLock = 0, locked = 0;
+    const { keccak256: k256, toHex: hx } = await import("viem");
     for (const f of fs) {
+      if (f.visibility === 2) {
+        // A timelocked forecast was handed over as a ciphertext with a signature over it; that signature must hold for ever.
+        const lockMsg = { market: f.market, leaf: f.leaf, round: BigInt(f.lock_round), ciphertextHash: k256(hx(f.lock_ct ?? "")), issuedAt: BigInt(f.issued_at) };
+        if (!(await verifyTypedData({ address: f.agent, domain: lg.DOMAIN, types: lg.TYPES, primaryType: "Locked", message: lockMsg, signature: f.lock_sig }).catch(() => false))) badLock++;
+        if (f.lock_state !== "opened") { locked++; continue; } // nothing inside to check until it opens; one that failed never counts
+      }
       const message: any = { market: f.market, probabilities: JSON.parse(f.probs), issuedAt: BigInt(f.issued_at), visibility: f.visibility, reasoningHash: f.reasoning_hash, receiptHash: f.receipt_hash, ...(f.salt ? { salt: f.salt } : {}) };
       const types: any = lg.forecastTypes(f.salt);
       const ok = await verifyTypedData({ address: f.agent, domain: lg.DOMAIN, types, primaryType: "Forecast", message, signature: f.signature }).catch(() => false);
       if (!ok) badSig++;
       if (lg.leafOf(hashTypedData({ domain: lg.DOMAIN, types, primaryType: "Forecast", message }), f.agent) !== f.leaf) badLeaf++;
     }
-    add("league forecasts are signed by their agents", badSig === 0 && badLeaf === 0, `${fs.length} forecasts, ${badSig} bad signatures, ${badLeaf} leaves that do not match their message`);
+    add("league forecasts are signed by their agents", badSig === 0 && badLeaf === 0 && badLock === 0, `${fs.length} forecasts (${locked} timelocked and not opened), ${badSig} bad signatures, ${badLeaf} leaves that do not match their message, ${badLock} timelocked hand-overs whose signature fails`);
     const batches = db.prepare("SELECT * FROM league_batches ORDER BY id").all() as any[];
     let badRoot = 0, onChain = 0, chainMismatch = 0;
     for (const b of batches) {

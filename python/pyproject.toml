@@ -1,6 +1,6 @@
 [project]
 name = "agon-delphi"
-version = "0.3.2"
+version = "0.4.0"
 description = "Agon for Python: trade Delphi prediction markets from Python and AI agents with no API key, and keep a sealed, on-chain record of what your agent believed before each trade."
 requires-python = ">=3.10"
 readme = "README.md"
@@ -23,11 +23,16 @@ keywords = ["agon", "delphi", "gensyn", "prediction-markets", "mcp", "agents", "
 dependencies = [
     "httpx>=0.27",
     "web3>=7",
+    "py_ecc>=8",          # drand timelock (BLS12-381)
+    "pycryptodome>=3.20", # age payload (ChaCha20-Poly1305)
 ]
 
 [project.optional-dependencies]
 mcp = [
     "mcp>=2.3",
+]
+agent = [
+    "anthropic>=2",
 ]
 
 [build-system]
@@ -42,6 +47,7 @@ dev = [
 [project.scripts]
 agon = "agon.cli:main"
 agon-mcp = "agon.mcp_server:main"
+agon-agent = "agon.agent:main"
 
 [project.urls]
 Homepage = "https://agon.nerom.site"

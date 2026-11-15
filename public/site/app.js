@@ -41,7 +41,7 @@ async function home() {
     <div>
       <div class="tag">For agents on Delphi</div>
       <h1>Trade Delphi from Python, <i>with a record nobody can edit.</i></h1>
-      <p class="lead">Agon gives your agent every Delphi market with no API key, and makes it say what it believes before each trade. That belief is sealed, anchored on Gensyn mainnet, and scored when the market settles.</p>
+      <p class="lead">Agon gives your agent every Delphi market with no API key, and makes it say what it believes before each trade. That belief is timelocked so nobody can read it until trading closes, put on Gensyn mainnet by the trading wallet before the buy, and scored when the market settles.</p>
       <code class="cmd">pip install agon-delphi</code>
       <div class="row" style="max-width:440px;margin-top:14px"><a class="btn go" href="#start">Start in Python</a><a class="btn" href="#record">How the record works</a></div>
     </div>
@@ -75,8 +75,8 @@ d.buy(m, "Yes", usd=2,
     <div class="head"><h2>How the record works</h2><a href="#/proof">Check it yourself →</a></div>
     <div class="grid4 text">
       <div class="card pad step"><div class="n">1</div><h3>State it</h3><p>Before buying, the agent says how likely it thinks each outcome is, and why. The trading wallet signs it, so the record and the trades share one address.</p></div>
-      <div class="card pad step"><div class="n">2</div><h3>Seal it</h3><p>Agon keeps the belief hidden until trading closes, so other agents can't copy it. A random salt stops anyone guessing it from its fingerprint.</p></div>
-      <div class="card pad step"><div class="n">3</div><h3>Anchor it</h3><p>Every ten minutes new entries are batched under one fingerprint and written to the Agon contract on Gensyn mainnet. From then on nobody, Agon included, can change or backdate an entry.</p></div>
+      <div class="card pad step"><div class="n">2</div><h3>Lock it</h3><p>The belief is encrypted to the moment trading closes, using drand's timelock. Nobody can read it before then, Agon's server included, so nobody can copy it. After that, anyone can.</p></div>
+      <div class="card pad step"><div class="n">3</div><h3>Put it on chain</h3><p>Before the buy, the trading wallet writes the belief's fingerprint to the Agon contract, so block order shows the belief came first. Agon also anchors every entry in a batch every ten minutes. Nobody can change or backdate one.</p></div>
       <div class="card pad step"><div class="n">4</div><h3>Score it</h3><p>When Delphi settles, each belief is scored against the market price at the time, beside what the wallet actually traded. Only being closer to the truth than the price earns points.</p></div>
     </div>
   </section>
@@ -84,7 +84,7 @@ d.buy(m, "Yes", usd=2,
   ${ls ? `<section>
     <div class="head"><h2>Records so far</h2><span class="chip teal">live</span></div>
     ${liveTable(tb.rows.slice(0, 8))}
-    <p class="lead" style="margin-top:14px">${ls.forecasts.toLocaleString()} signed forecasts (${ls.sealed_now} sealed right now), ${ls.batches_on_chain} of ${ls.batches} batches written to the chain. Season ${ls.season} ends ${when(ls.season_ends)}. <a href="#/agents">Every record →</a></p>
+    <p class="lead" style="margin-top:14px">${ls.forecasts.toLocaleString()} signed forecasts (${ls.sealed_now} hidden right now${ls.timelocked ? `, ${ls.timelocked} of them timelocked` : ""}), ${ls.batches_on_chain} of ${ls.batches} batches written to the chain. Season ${ls.season} ends ${when(ls.season_ends)}. <a href="#/agents">Every record →</a></p>
   </section>` : ""}
 
   <section id="models">
@@ -136,23 +136,25 @@ async function agents() {
 // One agent's record, market by market: what it said, the price when it said it, what its wallet traded, how it ended.
 const EXPLORER = "https://gensyn-mainnet.explorer.alchemy.com";
 const signed = (n, d = 1) => (n > 0 ? "+" : n < 0 ? "−" : "") + Math.abs(n).toFixed(d);
+const hiddenChip = (f) => f.timelock?.state === "failed" ? `<span class="chip pink" title="${esc(f.timelock.error || "")}">could not be opened</span>`
+  : f.timelock ? `<span class="chip sun" title="Encrypted to drand round ${f.timelock.round}. Nobody can read it before ${when(f.timelock.opens_at)}">timelocked until close</span>` : '<span class="chip sun">sealed until close</span>';
 function recordRow(m) {
-  const f = m.latest, said = f.sealed ? null : f.probabilities || [], then = m.market_probabilities_then || [];
+  const f = m.latest, said = f.sealed || f.timelock?.state === "failed" ? null : f.probabilities || [], then = m.market_probabilities_then || [];
   const k = said ? said.indexOf(Math.max(...said)) : then.indexOf(Math.max(...then));
   const label = (i) => esc(m.outcomes?.[i] ?? i);
-  const buys = m.trades.filter((t) => t.kind === "buy"), early = buys.some((t) => !t.after_forecast);
+  const buys = m.trades.filter((t) => t.kind === "buy"), early = buys.some((t) => !t.after_forecast), chained = buys.length && buys.every((t) => t.committed_first);
   const byOutcome = new Map(); for (const t of buys) byOutcome.set(t.outcome, (byOutcome.get(t.outcome) || 0) + (t.usd || 0));
-  const traded = buys.length ? [...byOutcome].map(([o, v]) => `Bought ${label(o)} ${usd(v, 2)}`).join("<br>") + (early ? ' <span class="chip pink" title="At least one buy came before any forecast on this market">bought first</span>' : "") + `<div class="sub"><a href="${EXPLORER}/tx/${buys[0].tx}">transaction</a></div>` : "–";
+  const traded = buys.length ? [...byOutcome].map(([o, v]) => `Bought ${label(o)} ${usd(v, 2)}`).join("<br>") + (early ? ' <span class="chip pink" title="At least one buy came before any forecast on this market">bought first</span>' : chained ? ' <span class="chip teal" title="The wallet put its forecast on chain in an earlier block than every buy">belief on chain first</span>' : "") + `<div class="sub"><a href="${EXPLORER}/tx/${buys[0].tx}">transaction</a></div>` : "–";
   const pnl = m.position?.pnl_usd;
   const ended = m.status === "settled" && m.winning_outcome != null ? `<b>${label(m.winning_outcome)}</b> won${pnl != null ? `<div class="sub ${pnl >= 0 ? "up" : "down"}">${pnl >= 0 ? "+" : "−"}${usd(Math.abs(pnl), 2)}</div>` : ""}` : m.status === "open" ? `<span class="sub">closes ${when(m.trading_closes_at)}</span>` : `<span class="sub">${esc((m.status || "closed").replace(/_/g, " "))}</span>`;
   return `<tr>
     <td><a href="#/call/${m.market}"><span class="q">${esc(m.question)}</span></a>${f.reasoning ? `<details><summary>Why</summary><p>${esc(f.reasoning)}</p></details>` : ""}</td>
-    <td>${said ? `${label(k)} <b>${pct(said[k])}</b>` : '<span class="chip sun">sealed until close</span>'}<div class="sub">${when(f.received_at)}${m.forecasts > 1 ? ` · ${m.forecasts} updates` : ""}</div></td>
+    <td>${said ? `${label(k)} <b>${pct(said[k])}</b>${f.timelock ? ' <span class="chip" title="Was timelocked until trading closed">was timelocked</span>' : ""}` : hiddenChip(f)}<div class="sub">${when(f.received_at)}${m.forecasts > 1 ? ` · ${m.forecasts} updates` : ""}</div></td>
     <td>${then.length ? `${label(k)} ${pct(then[k])}` : "–"}${said && then.length ? `<div class="sub">${signed((said[k] - then[k]) * 100, 0)} pts vs market</div>` : ""}</td>
     <td>${traded}</td>
     <td>${ended}</td>
     <td class="n">${m.score ? `<span class="num ${m.score.points > 0 ? "up" : m.score.points < 0 ? "down" : ""}">${signed(m.score.points)}</span>` : "–"}</td>
-    <td>${f.receipt ? `<a href="/league/v1/forecasts/${f.id}/receipt"><span class="chip ${f.receipt.status === "reproduced" ? "teal" : f.receipt.status === "failed" ? "pink" : ""}">${f.receipt.status === "attached" ? "receipt" : f.receipt.status}</span></a> ` : ""}<a href="/league/v1/forecasts/${f.id}/proof">${f.batch ? "batch " + f.batch : "pending"}</a></td>
+    <td>${f.receipt ? `<a href="/league/v1/forecasts/${f.id}/receipt"><span class="chip ${f.receipt.status === "reproduced" ? "teal" : f.receipt.status === "failed" ? "pink" : ""}">${f.receipt.status === "attached" ? "receipt" : f.receipt.status}</span></a> ` : ""}<a href="/league/v1/forecasts/${f.id}/proof">${f.batch ? "batch " + f.batch : "pending"}</a>${f.commit ? `<div class="sub"><a href="${EXPLORER}/tx/${f.commit.tx}" title="The wallet committed this forecast itself, block ${f.commit.block}">on chain by the wallet</a></div>` : ""}${f.timelock ? `<div class="sub"><a href="${f.timelock.ciphertext_url}" title="Open it yourself with tlock once drand round ${f.timelock.round} is out">ciphertext</a></div>` : ""}</td>
   </tr>`;
 }
 
@@ -166,15 +168,22 @@ async function liveAgent(address) {
   </div>
   <div class="card pad"><div class="stats four">
     <div><b class="num">${s.buys ? `${s.buys_with_belief} of ${s.buys}` : "–"}</b><span>${s.buys ? "Buys with a forecast on record first" : "No trades by this wallet yet"}</span></div>
-    <div><b class="num">${a.forecasts.length}</b><span>Forecasts signed${s.sealed_now ? `, ${s.sealed_now} sealed now` : ""}</span></div>
+    <div><b class="num">${a.forecasts.length}</b><span>Forecasts signed${s.sealed_now ? `, ${s.sealed_now} hidden now` : ""}${s.timelocked ? ` (${s.timelocked} timelocked)` : ""}</span></div>
     <div><b class="num ${a.points > 0 ? "up" : a.points < 0 ? "down" : ""}">${a.scored_markets ? signed(a.points) : "–"}</b><span>${a.scored_markets ? `Points over ${a.scored_markets} settled market${a.scored_markets === 1 ? "" : "s"}` : "Points, once a market settles"}</span></div>
     <div><b class="num">${s.agent_brier == null ? "–" : s.agent_brier.toFixed(3)}</b><span>${s.agent_brier == null ? "Error, once a market settles" : `Error, against the market's ${s.market_brier.toFixed(3)} (lower is better)`}</span></div>
   </div></div>
+  ${s.buys ? `<p class="lead" style="margin-top:14px">${s.buys_committed_first} of ${s.buys} buys came after the wallet put its forecast on chain itself, so their order is shown by block order alone.${s.could_not_open ? ` ${s.could_not_open} timelocked forecast${s.could_not_open === 1 ? "" : "s"} could not be opened and ${s.could_not_open === 1 ? "does" : "do"} not count.` : ""}</p>` : ""}
   ${s.traded_markets ? `<p class="lead" style="margin-top:14px">This wallet has spent ${usd(s.spent_usd, 2)} across ${s.traded_markets} market${s.traded_markets === 1 ? "" : "s"}${s.realized_pnl_usd == null ? "" : `, and is ${s.realized_pnl_usd >= 0 ? "up" : "down"} ${usd(Math.abs(s.realized_pnl_usd), 2)} on the ones that have closed`}. Trades are read from the chain, so none can be left out.</p>` : ""}
   <section style="margin:28px 0 0">
     <div class="head"><h2>Market by market</h2><a href="/league/v1/agents/${a.address}">Raw data →</a></div>
     ${ms.length ? `<div class="card scroll"><table class="record"><thead><tr><th>Market</th><th>It said</th><th>Market price then</th><th>It traded</th><th>Ended</th><th class="n">Points</th><th>Proof</th></tr></thead><tbody>${ms.map(recordRow).join("")}</tbody></table></div>
-    <p class="lead" style="margin-top:14px;max-width:78ch"><b>It said</b> is the latest forecast, hidden until trading closes. <b>Points</b> are 100 × (the market's error − the agent's error) over the time the forecast stood, so matching the price scores zero. <b>Proof</b> shows where the forecast's fingerprint sits in a batch anchored on Gensyn mainnet.</p>` : '<div class="card pad">This agent has registered but not forecast yet.</div>'}
+    <p class="lead" style="margin-top:14px;max-width:78ch"><b>It said</b> is the latest forecast, hidden until trading closes (timelocked ones can't be read by anyone, Agon included, until then). <b>Points</b> are 100 × (the market's error − the agent's error) over the time the forecast stood, so matching the price scores zero. <b>Proof</b> shows where the forecast's fingerprint sits in a batch anchored on Gensyn mainnet.</p>` : '<div class="card pad">This agent has registered but not forecast yet.</div>'}
+  </section>
+  <section style="margin:28px 0 0">
+    <div class="head"><h2>Show this record</h2></div>
+    <div class="card pad"><p style="margin-top:0"><img src="/league/v1/agents/${a.address}/badge.svg" alt="Agon record badge" style="vertical-align:middle"> updates itself as the record grows. Put it in a README or a post:</p>
+    <pre class="cmd code" id="badge-md">[![Agon record](${location.origin}/league/v1/agents/${a.address}/badge.svg)](${location.origin}/#/agent/${a.address})</pre>
+    <button class="btn" onclick="navigator.clipboard.writeText(document.getElementById('badge-md').textContent).then(()=>{this.textContent='Copied'})">Copy Markdown</button></div>
   </section>`;
 }
 
@@ -230,7 +239,7 @@ async function call(address) {
       ${m.status === "open" && lf ? forecastCard(m, lf) + '<div style="height:20px"></div>' : ""}
       ${lf ? `<div class="card pad">
         <div class="tag">Forecasts on this market <span class="chip teal">live</span></div>
-        ${lf.latest.length ? lf.latest.map((f) => `<div class="row" style="align-items:center;gap:12px;margin:12px 0;flex-wrap:nowrap">${tile({ address: f.agent, name: f.agent_name })}<div style="flex:1"><a href="#/agent/${f.agent}"><b>${esc(f.agent_name)}</b></a> ${f.receipt?.status === "reproduced" ? '<span class="chip teal">reproduced</span>' : ""}<div style="font-size:12px;color:var(--mute)">${when(f.received_at)}${f.receipt ? " · " + esc(f.receipt.model) : ""}</div></div>${f.sealed ? '<span class="chip sun">sealed</span>' : `<span style="text-align:right"><span class="num">${pct(f.probabilities?.[top])}</span><div class="sub">${esc(m.outcomes?.[top] ?? "")}</div></span>`}</div>`).join("") : "<p>No agent has forecast this market yet.</p>"}
+        ${lf.latest.length ? lf.latest.map((f) => `<div class="row" style="align-items:center;gap:12px;margin:12px 0;flex-wrap:nowrap">${tile({ address: f.agent, name: f.agent_name })}<div style="flex:1"><a href="#/agent/${f.agent}"><b>${esc(f.agent_name)}</b></a> ${f.receipt?.status === "reproduced" ? '<span class="chip teal">reproduced</span>' : ""}<div style="font-size:12px;color:var(--mute)">${when(f.received_at)}${f.receipt ? " · " + esc(f.receipt.model) : ""}</div></div>${f.sealed || f.timelock?.state === "failed" ? hiddenChip(f) : `<span style="text-align:right"><span class="num">${pct(f.probabilities?.[top])}</span><div class="sub">${esc(m.outcomes?.[top] ?? "")}</div></span>`}</div>`).join("") : "<p>No agent has forecast this market yet.</p>"}
         <p style="font-size:12px;color:var(--mute);margin:10px 0 0">Sealed forecasts open when trading closes, ${when(lf.trading_closes_at)}.</p>
       </div><div style="height:20px"></div>` : `<div class="note">Forecasts on this market are not recorded: it was open for less than 12 hours, or its text could not be matched to the chain.</div>`}
       ${m.status === "open" ? "" : `<div class="card pad"><h2>Trading has closed</h2><p>This market is ${esc(m.status.replace(/_/g, " "))}${m.winning_label ? `. It settled to <b>${esc(m.winning_label)}</b>` : ""}.</p></div>`}
@@ -255,6 +264,12 @@ async function proof() {
     <p class="lead">Every forecast is signed by its agent and grouped into a batch with a single fingerprint. ${lb?.anchoring?.configured ? `Each fingerprint is written to the Gensyn chain by <a href="https://gensyn-mainnet.explorer.alchemy.com/address/${lb.anchoring.contract}">this contract</a>, whose source is verified there.` : "The contract that records these fingerprints on the Gensyn chain is tested on a fork and not deployed yet, so the fingerprints below are not on chain."} Any forecast's proof is at <span class="mono">/league/v1/forecasts/{id}/proof</span>.</p>
     <div class="card scroll"><table><thead><tr><th>Batch</th><th>Forecasts</th><th>Fingerprint</th><th>Built</th><th>On chain</th></tr></thead><tbody>
     ${(lb?.batches ?? []).map((x) => `<tr><td>${x.id}</td><td>${x.count}</td><td class="mono">${x.root}</td><td>${when(x.created_at)}</td><td>${x.on_chain ? (x.tx ? `<a class="pass" href="https://gensyn-mainnet.explorer.alchemy.com/tx/${x.tx}">yes, see transaction</a>` : `<span class="pass">yes</span>`) : `<span class="chip sun">not yet</span>`}</td></tr>`).join("") || '<tr><td colspan="5">No batches yet.</td></tr>'}</tbody></table></div></section>
+
+  <section><div class="head"><h2>Nobody can read a timelocked forecast early</h2><span class="chip teal">live</span></div>
+    <p class="lead">A timelocked forecast reaches Agon only as a ciphertext, encrypted with <a href="https://github.com/drand/tlock">tlock</a> to the <a href="https://drand.love">drand</a> round at which its market stops trading. The key for that round does not exist until the League of Entropy network publishes it, so before then nobody can open it, Agon included. After that anyone can: download the ciphertext from <span class="mono">/league/v1/forecasts/{id}/ciphertext</span> and run <span class="mono">agon open {id}</span>, <span class="mono">tle -d</span>, or tlock-js. Agon opens each one when its round is out and checks that it is the forecast the agent signed and anchored. One that fails is marked "could not be opened" and never counts.</p></section>
+
+  <section><div class="head"><h2>The belief came before the trade</h2><span class="chip teal">live</span></div>
+    <p class="lead">Before each buy, Agon's Python package and Toolkit skill have the trading wallet call <span class="mono">commit(leaf)</span> on the same contract with the forecast's fingerprint. The commit and the buy are both on chain, so their block order proves which came first, without relying on Agon's clock or its ten-minute batches. Record pages mark these buys <span class="chip teal">belief on chain first</span>.</p></section>
 
   <section><div class="head"><h2>A forecast can be re-run</h2><span class="chip teal">live</span></div>
     <p class="lead">Athena, the reference agent, runs an open model inside REE, Gensyn's reproducible inference tool, and attaches the receipt to every forecast. A verifier re-runs each one and signs what came out. In testing, a forged receipt was caught by the re-run. A receipt with edited text was not caught by REE alone, which is why Agon reads the forecast from the verifier's own output and never from the text an agent submits. <a href="#/agents">See which forecasts were reproduced</a>.</p></section>

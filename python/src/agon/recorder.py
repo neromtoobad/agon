@@ -7,8 +7,12 @@ When the market settles, the agent's record writes itself:
 - results: what the same wallet actually bought and sold, read from the chain
 
 The entry is signed with the trading wallet's own key (EIP-712), so the record and the trades share one address.
-Entries are sealed until trading closes: Agon keeps them hidden until then, and once an entry's batch is anchored
-(within ten minutes) nobody, Agon included, can change or backdate it.
+
+Entries are timelocked by default: the signed forecast is encrypted to the drand round at which the market stops
+trading (see ``agon.tlock``), and only the ciphertext reaches Agon. Nobody, Agon's server included, can read it
+before then; afterwards anyone can. Once an entry's batch is anchored (within ten minutes) nobody can change or
+backdate it, and before a buy the trading wallet also puts the entry's fingerprint on chain itself
+(``Agon.commit``), so the order of belief and trade is fixed by block order, not by any server's clock.
 
     d = Delphi(private_key=key, record=True)
     d.buy(m, "Yes", usd=2, belief={"Yes": 0.71}, reasoning="Polls moved after the debate ...")
@@ -24,12 +28,16 @@ from typing import Any, Mapping, Optional, Sequence
 
 import httpx
 from eth_account import Account
-from eth_account.messages import encode_typed_data
+from eth_account.messages import _hash_eip191_message, encode_typed_data
 from web3 import Web3
 
 from .models import Market, _Dict
 
 DEFAULT_URL = "https://agon.nerom.site"
+# The Agon contract on Gensyn mainnet: anchors the server's batches, and lets any wallet commit a leaf itself.
+AGON_CONTRACT = "0xa7700A819D72701d5bd90538d8864b2C79F27bf4"
+AGON_ABI = [{"type": "function", "name": "commit", "stateMutability": "nonpayable",
+             "inputs": [{"name": "leaf", "type": "bytes32"}], "outputs": []}]
 ZERO32 = "0x" + "00" * 32
 MAX_REASONING = 4000
 
@@ -43,6 +51,10 @@ TYPES = {
         {"name": "issuedAt", "type": "uint64"}, {"name": "visibility", "type": "uint8"},
         {"name": "reasoningHash", "type": "bytes32"}, {"name": "receiptHash", "type": "bytes32"},
         {"name": "salt", "type": "bytes32"},
+    ],
+    "Locked": [
+        {"name": "market", "type": "address"}, {"name": "leaf", "type": "bytes32"}, {"name": "round", "type": "uint64"},
+        {"name": "ciphertextHash", "type": "bytes32"}, {"name": "issuedAt", "type": "uint64"},
     ],
 }
 
@@ -61,6 +73,8 @@ class Entry(_Dict):
     url: str
     proof_url: str
     leaf: str = field(repr=False, default="")
+    timelocked: bool = False            # True: encrypted to a drand round, unreadable by anyone until then
+    commit_tx: Optional[str] = None     # set once the wallet has put the leaf on chain itself
 
 
 def to_basis_points(probs: Sequence[float]) -> list[int]:
@@ -147,16 +161,23 @@ class Recorder:
 
     # ------------------------------------------------------------ signing
 
-    def _sign(self, primary: str, message: dict) -> str:
-        msg = encode_typed_data(full_message={
+    def _typed(self, primary: str, message: dict):
+        return encode_typed_data(full_message={
             "types": {"EIP712Domain": [{"name": "name", "type": "string"}, {"name": "version", "type": "string"},
                                        {"name": "chainId", "type": "uint256"}],
-                      # only the primary type: Agent and Forecast don't reference each other, so the hash is the
-                      # same, and eth_account refuses messages whose types have more than one possible root
+                      # only the primary type: the types don't reference each other, so the hash is the same,
+                      # and eth_account refuses messages whose types have more than one possible root
                       primary: TYPES[primary]},
             "primaryType": primary, "domain": self.domain, "message": message})
-        sig = self.account.sign_message(msg).signature.hex()
+
+    def _sign(self, primary: str, message: dict) -> str:
+        sig = self.account.sign_message(self._typed(primary, message)).signature.hex()
         return sig if sig.startswith("0x") else "0x" + sig
+
+    def leaf_of(self, message: dict) -> str:
+        """The forecast's public fingerprint: keccak256(EIP-712 digest ‖ agent address). It is what gets anchored."""
+        digest = _hash_eip191_message(self._typed("Forecast", message))
+        return "0x" + Web3.keccak(digest + bytes.fromhex(self.address[2:])).hex().removeprefix("0x")
 
     def _post(self, path: str, body: dict) -> dict:
         try:
@@ -200,13 +221,20 @@ class Recorder:
                                 "or its text does not match the chain")
 
     def log(self, market: Market, belief: Mapping[Any, float] | Sequence[float], reasoning: str | None = None,
-            *, public: bool = False, receipt: str | None = None) -> Entry:
-        """Seal what the agent believes about ``market`` now. ``reasoning`` is stored and its hash signed; it is
-        revealed with the forecast when trading closes. ``receipt`` is an optional REE receipt file's text."""
+            *, public: bool = False, receipt: str | None = None, timelock: bool = False) -> Entry:
+        """Record what the agent believes about ``market`` now. ``reasoning`` is kept with it and its hash signed.
+
+        - ``timelock=True``: encrypted to the drand round at trading close; nobody, Agon included, can read it
+          before then. (Receipts can't be timelocked yet.)
+        - default: sealed by Agon's server until trading closes (hidden from other agents, not from the operator).
+        - ``public=True``: visible straight away.
+        ``receipt`` is an optional REE receipt file's text."""
         self._ensure_registered()
         bp = to_basis_points(belief_vector(market, belief))
         if reasoning is not None and len(reasoning) > MAX_REASONING:
             reasoning = reasoning[:MAX_REASONING]
+        if timelock and (public or receipt is not None):
+            raise ValueError("a timelocked entry can't also be public or carry a receipt")
         rh = Web3.keccak(text=reasoning).hex() if reasoning else ZERO32
         rh = rh if rh.startswith("0x") else "0x" + rh
         receipt_hash = ZERO32
@@ -214,18 +242,41 @@ class Recorder:
             import json
             receipt_hash = "0x" + json.loads(receipt)["hashes"]["receipt_hash"].removeprefix("0x").lower()
         msg = {"market": Web3.to_checksum_address(market.address), "probabilities": bp, "issuedAt": int(time.time()),
-               "visibility": 1 if public else 0, "reasoningHash": rh, "receiptHash": receipt_hash,
+               "visibility": 2 if timelock else 1 if public else 0, "reasoningHash": rh, "receiptHash": receipt_hash,
                # random per entry, so a sealed belief can't be guessed from its public fingerprint
                "salt": "0x" + secrets.token_hex(32)}
-        body: dict[str, Any] = {"address": self.address, "message": msg, "signature": self._sign("Forecast", msg)}
-        if reasoning:
-            body["reasoning"] = reasoning
-        if receipt is not None:
-            body["receipt"] = receipt
-        out = self._post("/league/v1/forecasts", body)
+        sig = self._sign("Forecast", msg)
+        if timelock:
+            out = self._post("/league/v1/forecasts", self._locked_body(market, msg, sig, reasoning))
+        else:
+            body: dict[str, Any] = {"address": self.address, "message": msg, "signature": sig}
+            if reasoning:
+                body["reasoning"] = reasoning
+            if receipt is not None:
+                body["receipt"] = receipt
+            out = self._post("/league/v1/forecasts", body)
         return Entry(id=out["id"], market=market.address, probabilities=[b / 10000 for b in bp],
                      sealed_until=out.get("sealed_until"), url=self.agent_url,
-                     proof_url=f"{self.url}/league/v1/forecasts/{out['id']}/proof", leaf=out.get("leaf", ""))
+                     proof_url=f"{self.url}/league/v1/forecasts/{out['id']}/proof", leaf=out.get("leaf") or self.leaf_of(msg),
+                     timelocked=timelock)
+
+    def _locked_body(self, market: Market, msg: dict, sig: str, reasoning: str | None) -> dict:
+        import json
+        from . import tlock
+        if market.trading_closes_at is None:
+            raise RecorderError("this market has no trading deadline to lock the entry to")
+        rnd = tlock.round_at(market.trading_closes_at.timestamp())
+        inner = {"message": msg, "signature": sig, **({"reasoning": reasoning} if reasoning else {})}
+        ct = tlock.encrypt(json.dumps(inner, separators=(",", ":")).encode(), rnd)
+        ch = Web3.keccak(text=ct).hex()
+        locked = {"market": msg["market"], "leaf": self.leaf_of(msg), "round": rnd,
+                  "ciphertextHash": ch if ch.startswith("0x") else "0x" + ch, "issuedAt": msg["issuedAt"]}
+        return {"address": self.address, "locked": locked, "signature": self._sign("Locked", locked), "ciphertext": ct}
+
+    def report_commit(self, entry_id: int, tx_hash: str) -> dict:
+        """Tell Agon about the transaction in which this wallet committed an entry's leaf on chain. Agon checks it
+        on chain; it would also find it on its next scan, this just makes it show up straight away."""
+        return self._post(f"/league/v1/forecasts/{entry_id}/commit", {"tx": tx_hash})
 
     def record(self) -> dict:
         """This agent's record so far. See ``fetch_record``."""

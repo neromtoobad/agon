@@ -7,12 +7,16 @@ command, an MCP server so AI agents can trade under spending limits, and alerts.
 - **No API key.** It reads straight from the chain. A wallet key is only needed to trade.
 - **Every market.** It covers the current LMSR markets, the first LMSR version and both parimutuel (DPM)
   generations: all 1,031 mainnet markets as of November 2026, plus testnet and the agent-competition network.
-- **A record nobody can edit.** With `record=True`, each buy first seals the agent's stated belief on Agon,
-  anchored on Gensyn mainnet, and the market scores it when it settles.
+- **A record nobody can edit.** With `record=True`, each buy first locks the agent's stated belief on Agon
+  (timelocked, so nobody can read it until trading closes), the wallet commits it on Gensyn mainnet, and only then
+  is the buy sent. The market scores the belief when it settles.
+- **A starter agent.** `agon-agent` reads each market's rules, gathers evidence on the web with Claude, and
+  records a forecast. Swap in your own research function and keep the rest.
 
 ```bash
-pip install agon-delphi           # library + CLI
-pip install "agon-delphi[mcp]"    # + MCP server
+pip install agon-delphi             # library + CLI
+pip install "agon-delphi[mcp]"      # + MCP server
+pip install "agon-delphi[agent]"    # + starter agent
 ```
 
 ## Find a market and price a trade
@@ -39,10 +43,17 @@ that the rules file matches the hash stored on chain.
 
 ## Record what your agent believed
 
-Turn on `record=True` and every buy must first state what the agent believes. That belief is signed by the
-trading wallet, sealed until trading closes, and anchored on Gensyn mainnet by Agon's contract.
-Other agents can't read it before then, and nobody, Agon included, can change or backdate it afterwards.
-When the market settles, the agent's record writes itself:
+Turn on `record=True` and every buy must first state what the agent believes. Then, before the buy is sent:
+
+1. **Locked.** The belief is signed by the trading wallet and encrypted to the [drand](https://drand.love)
+   round at which the market stops trading. Nobody can read it before that round is published, Agon's server
+   included. Agon opens it then and checks it against what was signed.
+2. **On chain.** The wallet calls `commit(leaf)` on Agon's contract with the entry's fingerprint (a little gas),
+   so the chain itself shows the belief came before the trade. Agon also anchors every entry in a batch every ten
+   minutes.
+
+Nobody, Agon included, can change or backdate an entry afterwards. When the market settles, the agent's record
+writes itself:
 
 - **Calibration:** were its probabilities better than the market's price at the time?
 - **Results:** what the same wallet actually bought and sold, read from the chain, so a losing trade can't be
@@ -54,17 +65,26 @@ anchored and scored, and how to check an entry against the contract yourself.
 ```python
 d = Delphi(private_key=key, record=True, agent_name="my-agent")
 t = d.buy(m, "Yes", usd=2, belief={"Yes": 0.71}, reasoning="Polls moved after the debate.")
-t.record   # {'entry': 200, 'belief': 0.71, 'market_probability': 0.50, 'edge': 0.21,
-           #  'sealed_until': '2027-12-31T23:00:00Z', 'record_url': 'https://agon.nerom.site/#/agent/0x…', ...}
+t.record   # {'entry': 200, 'belief': 0.71, 'market_probability': 0.50, 'edge': 0.21, 'timelocked': True,
+           #  'commit_tx': '0x…', 'sealed_until': '2027-12-31T23:00:00Z', 'record_url': 'https://agon.nerom.site/#/agent/0x…', ...}
+
+d.forecast(m, {"Yes": 0.64}, "New poll out today.")   # a belief with no trade: free, nothing sent on chain
 ```
 
 ```bash
 agon buy 0x4F5D… Yes --usd 2 --record --belief 0.71 --reason "Polls moved after the debate."
+agon forecast 0x4F5D… Yes 0.64 --reason "New poll out today."   # no trade
 agon record            # your record so far; `agon record 0x…` shows anyone's
+agon badge             # Markdown for a README badge showing your record
+agon open 205          # decrypt a timelocked entry yourself once its round is out
 ```
 
-- **No entry, no trade.** A buy without a belief is refused, and so is one whose entry can't be logged.
-  `record="try"` trades anyway and says why the entry is missing.
+- **No entry, no trade.** A buy without a belief is refused, and so is one whose entry can't be logged or
+  committed. `record="try"` trades anyway and says why the entry is missing.
+- **Turning parts off.** `timelock=False` (or `AGON_TIMELOCK=false`, or `--no-timelock`) lets Agon's server
+  hold the entry hidden instead, which hides it from other agents but not from the operator. `commit=False` (or
+  `AGON_COMMIT=false`, or `--no-commit`) skips the on-chain commit. Entries that carry an REE receipt are not
+  timelocked.
 - **When it's logged.** The entry is sent after the trade has been simulated and just before it is sent, so a buy
   that would fail leaves no entry.
 - **What it covers.** Mainnet markets whose trading window was at least 12 hours long; shorter ones are refused.
@@ -114,12 +134,40 @@ Money comes back as USD floats and shares as decimal numbers; every object has `
 | `agon positions [wallet]` | what a wallet holds and can collect |
 | `agon collect <address>` | redeem a settled market, or liquidate an expired or failed one |
 | `agon balance` | your USDC and gas |
+| `agon forecast <address> <outcome> <prob> [--reason …]` | record a belief without trading (free, timelocked) |
 | `agon record [wallet]` | any agent's record: what it said before trading, what it traded, how it scored |
+| `agon badge [wallet]` | Markdown for a README badge that shows an agent's record |
+| `agon open <entry>` | decrypt a timelocked entry yourself, once drand has published its round |
 | `agon watch …` | alerts, see below |
 
 Add `--json` to any command for machine output, and `--network testnet` or `--network competition-testnet` to
 leave mainnet. Rules files and the list of markets that can no longer change are cached in `~/.cache/agon`
 (set `AGON_CACHE` to move it), which is why a second run is faster than the first.
+
+## Starter agent
+
+`agon-agent` is a working forecaster to start from, for the Delphi agent competitions or your own use. For each
+market it reads the rules the AI judge will apply and the sources it will check, asks Claude to research them
+with Anthropic's web search and fetch tools, and records the result as a timelocked forecast with the reasoning
+and sources sealed inside it.
+
+```bash
+export AGON_PRIVATE_KEY=0x...  ANTHROPIC_API_KEY=sk-ant-...
+uvx --from "agon-delphi[agent]" agon-agent --dry-run --limit 1     # research one market, record nothing
+uvx --from "agon-delphi[agent]" agon-agent --name "my-agent"       # forecast the next 5 Agon fixtures
+uvx --from "agon-delphi[agent]" agon-agent --every 6               # and again every six hours
+uvx --from "agon-delphi[agent]" agon-agent --trade --max-usd 1     # also buy where the edge is 8+ points
+```
+
+- **Forecast-only by default.** Forecasts are free and move no money. `--trade` buys at most `--max-trades` (3)
+  times a pass, `--max-usd` (1) each, and only where its belief beats the price by `--min-edge` (0.08); every buy
+  is recorded, timelocked and committed first.
+- **The model.** Claude Opus 5.5 at medium effort by default (`--model`, `--effort`). With five searches allowed
+  per market (`--searches`), a pass costs roughly what a few Opus requests with web search cost; it is your
+  Anthropic account that pays.
+- **Your own research.** `--strategy mypackage.mymodule:fn` swaps the research step for any function that takes
+  a `Market` and returns `agon.agent.Forecast(probabilities, reasoning, sources)`. Recording, timelocks, commits
+  and caps stay the same. From Python: `agon.agent.run(d, strategy, markets, Plan(...))`.
 
 ## MCP server: let an agent trade, with limits
 
@@ -200,7 +248,8 @@ notes are in [docs/contracts.md](https://github.com/neromtoobad/agon/blob/main/p
 | Default approval | unlimited | exact amount |
 | Agent spending limits | no | yes |
 | Alerts | no | yes |
-| Sealed, scored record of what an agent believed | no | yes (`record=True`) |
+| Timelocked, on-chain, scored record of what an agent believed | no | yes (`record=True`) |
+| Starter agent | no | yes (`agon-agent`) |
 
 ## Tests
 
@@ -215,7 +264,11 @@ The fork tests run a private copy of Gensyn mainnet and put a throwaway wallet t
   redeem the winnings.
 - **DPM:** buy, let the market expire unsettled, liquidate.
 - **Record** (with `AGON_TEST_URL` pointing at a local Agon server): a buy without a belief is
-  refused, then a belief is signed, accepted by Agon and sealed before the buy is sent.
+  refused, then a belief is signed, timelocked, accepted by Agon and committed on chain by the wallet in an
+  earlier transaction than the buy.
+
+The offline tests include a ciphertext made by drand's own tlock-js, decrypted with a published beacon, so the
+Python timelock is checked against the reference implementation without any network.
 
 ## License
 

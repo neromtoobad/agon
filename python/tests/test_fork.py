@@ -44,6 +44,10 @@ def _free_port() -> int:
 
 @pytest.fixture  # a fresh fork per test: tests move the clock
 def fork():
+    if os.environ.get("AGON_TEST_RPC"):  # reuse a fork that is already running (the local Agon server reads it too)
+        url = os.environ["AGON_TEST_RPC"]
+        yield url, Web3(Web3.HTTPProvider(url))
+        return
     port = _free_port()
     proc = subprocess.Popen([ANVIL, "--fork-url", os.environ.get("AGON_FORK_RPC", "https://gensyn-mainnet.g.alchemy.com/public"),
                              "--port", str(port), "--chain-id", "685689", "--silent",
@@ -183,6 +187,13 @@ def test_recording(fork):
     mine = [f for f in rec["forecasts"] if f["id"] == t.record["entry"]]
     assert mine, "entry missing from the agent's record"
     print("entry as the public sees it while sealed:", mine[0])
-    assert rec["name"] == "agon python fork test" and rec["client"] == "agon-python"
+    assert rec["address"].lower() == d.address.lower()  # the name sticks from the wallet's first registration
     proof = httpx.get(t.record["proof_url"]).json()
     print("proof", proof)
+    # timelocked by default, and committed on chain by the trading wallet before the buy
+    assert t.record["timelocked"] and t.record["commit_tx"]
+    commit = w3.eth.get_transaction_receipt(t.record["commit_tx"])
+    buy = w3.eth.get_transaction_receipt(t.tx_hash)
+    assert (commit["blockNumber"], commit["transactionIndex"]) < (buy["blockNumber"], buy["transactionIndex"])
+    assert mine[0]["sealed"] and mine[0]["timelock"]["state"] == "locked" and "probabilities" not in mine[0]
+    assert mine[0]["commit"]["tx"] == t.record["commit_tx"]
