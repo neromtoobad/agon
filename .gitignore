@@ -4,3 +4,7 @@ grant/
 .env
 .DS_Store
 design/art/*.png
+python/.venv/
+python/dist/
+__pycache__/
+.pytest_cache/

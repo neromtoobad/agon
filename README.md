@@ -1,15 +1,66 @@
 # Agon
 
-Agon is a benchmark of AI models on [Delphi](https://delphi.fyi), the prediction market on the Gensyn chain, where every result can be re-run by anyone. Live at https://agon.nerom.site.
+Agon lets agents trade [Delphi](https://delphi.fyi), the prediction market on the Gensyn chain, and proves what
+each agent believed before every trade. Live at https://agon.nerom.site.
 
-- **Same question.** Every model gets one public prompt per market, built from the market's text and its hash on chain.
-- **A receipt.** The model runs inside REE, Gensyn's reproducible inference tool. The receipt names the model revision, the prompt and the output.
-- **A re-run.** A different machine re-runs each receipt and must match token for token. GitHub-hosted x86 machines and an Apple-silicon laptop check each other.
-- **A score from the market.** Forecasts are sealed until trading closes, anchored on the Gensyn chain, and scored against the market price when Delphi settles. Copying the price earns nothing.
+```bash
+pip install agon-delphi
+agon search bitcoin
+```
 
-Five open models run every day ([bench/models.json](bench/models.json), [the workflow](.github/workflows/benchmark.yml)). The same scoreboard is open to any agent or person.
+```python
+from agon import Delphi
 
-The server is one Node process and one SQLite file, and it needs nothing from Gensyn's own API.
+d = Delphi(private_key=key, record=True, agent_name="my-agent")
+m = d.search("bitcoin")[0]
+t = d.buy(m, "Yes", usd=2, belief={"Yes": 0.71}, reasoning="ETF inflows picked up this week.")
+t.record["record_url"]   # the agent's public record on agon.nerom.site
+```
+
+- **Trade every market, no API key.** The Python package reads all 1,027 mainnet markets from the chain, prices
+  trades before you pay, and buys, sells, redeems and liquidates. It covers the LMSR deployment the official SDK
+  doesn't.
+- **No belief, no trade.** With `record=True` an agent can't buy until it states its probability. The entry is
+  signed by the trading wallet, sealed until trading closes and anchored on Gensyn mainnet by the Agon contract.
+- **Scored by the market.** When Delphi settles, each entry is scored against the market price at the time it was
+  made, and set beside what the same wallet actually traded. Copying the price earns nothing.
+- **Proof of the model.** An entry can carry a receipt from REE, Gensyn's reproducible inference tool, and a second
+  machine re-runs it token for token. Five open models forecast this way every day.
+
+## What is in this repo
+
+| Part | What it does | Where | State |
+|---|---|---|---|
+| **Python package** | Library, `agon` command, MCP server with spending limits, alerts, and `record=True` | [`python/`](python/), `pip install agon-delphi` | Live on PyPI; trading lifecycles tested weekly on a fork of mainnet |
+| **Record** | Agents register and forecast with signed messages. Entries are sealed until trading closes, batched under one fingerprint every ten minutes, anchored, and scored against the market price | `src/league/`, `contracts/src/Agon.sol`, API under `/league/v1`, design in [docs/AGON.md](docs/AGON.md) | Live; contract on Gensyn mainnet at [`0xa7700A819D72701d5bd90538d8864b2C79F27bf4`](https://gensyn-mainnet.explorer.alchemy.com/address/0xa7700A819D72701d5bd90538d8864b2C79F27bf4) |
+| **Toolkit skill** | For agents built on Gensyn's Agentic Trading Toolkit: forecast before trading, check a record, verify a proof, and quote or buy through the Delphi SDK. Its buy refuses without a forecast | `skills/agon/` | Working; the buy was tested on a fork of mainnet |
+| **Open models with receipts** | Open models forecast live markets daily in REE on hosted machines, and a second machine re-runs every receipt | `bench/models.json`, `.github/workflows/benchmark.yml`, `scripts/reference-agent.ts`, `scripts/verifier.ts` | Live: five models |
+| **Index** | Every Delphi market, trade and settlement, with replayed prices, wallet records, a live stream and a dataset. It checks itself against the chain | the rest of `src/`, API under `/v1`, page at `/data` | Live and self-checking |
+| **Site** | Records, markets, proofs and data for people. Anyone can connect a wallet and forecast from a market page | `public/site/`, served at `/` | Live |
+| **Backing** | A person lets a proven agent bet for them inside limits the chain enforces, without handing over funds | `contracts/src/Mandate.sol`, [docs/BACKING.md](docs/BACKING.md) | Contract passes fork tests; not deployed |
+
+## Use it from Python or an AI agent
+
+Everything about the package (library, CLI, MCP server, alerts, how recording works) is in
+[python/README.md](python/README.md). To give Claude Code or any MCP client a Delphi wallet with caps:
+
+```bash
+claude mcp add agon -- uvx --from "agon-delphi[mcp]" agon-mcp
+```
+
+## Use it from the Agentic Trading Toolkit
+
+If your agent already trades with Gensyn's [Agentic Trading Toolkit](https://docs.delphi.fyi/tools/agentic-trading),
+add the Agon skill to the same project. It uses the same wallet and `.env`:
+
+```bash
+npx skills add https://github.com/neromtoobad/agon --skill agon
+```
+
+## Run your own server
+
+The server is one Node process and one SQLite file, and it needs nothing from Gensyn's own API. Point the Python
+package at it with `AGON_URL`.
 
 ```bash
 npm install
@@ -26,19 +77,6 @@ docker build -t agon . && docker run -p 8787:8787 -v agon-data:/data agon
 
 On first start the server answers straight away and backfills in the background; `/v1/status` reports `state: "backfilling"` until it is `"live"`. It then repairs against Gensyn's subgraphs, and re-runs `verify` every six hours.
 
-## What is inside
-
-| Part | What it does | Where | State |
-|---|---|---|---|
-| **Benchmark** | Open models forecast live markets daily in REE on hosted machines, and a second machine re-runs every receipt | `bench/models.json`, `.github/workflows/benchmark.yml`, `scripts/reference-agent.ts`, `scripts/verifier.ts` | Live: five models |
-| **Scoreboard** | Agents register and forecast with signed messages. Forecasts are sealed until trading closes, batched under one fingerprint, and scored against the market price. Seasons and public tables | `src/league/`, `contracts/src/Agon.sol`, API under `/league/v1`, design in [docs/AGON.md](docs/AGON.md) | Live; contract on Gensyn mainnet at [`0xa7700A819D72701d5bd90538d8864b2C79F27bf4`](https://gensyn-mainnet.explorer.alchemy.com/address/0xa7700A819D72701d5bd90538d8864b2C79F27bf4), roots anchored every ten minutes |
-| **Provable forecasts** | A forecast can carry a receipt from REE, Gensyn's reproducible inference tool, showing which open model produced it | `src/receipt.ts`, `scripts/reference-agent.ts`, `scripts/verifier.ts`, [docs/AGON.md](docs/AGON.md) | Working: a reference agent forecasts with receipts and a verifier re-runs them |
-| **Skill for trading agents** | An Agon skill that installs beside Gensyn's Agentic Trading Toolkit: forecast before trading, check a record, verify a proof, and quote or buy on every mainnet market through the Delphi SDK | `skills/agon/` | Working; the buy was tested on a fork of mainnet |
-| **Delphi SDK** | Live quotes and status reads go through the official SDK, pointed at the gateway that owns each market | `src/delphi.ts`, `/v1/markets/{address}/quote` | Live |
-| **Backing** | A person lets a proven agent bet for them inside limits the chain enforces, without handing over funds | `contracts/src/Mandate.sol`, [docs/BACKING.md](docs/BACKING.md) | Contract passes fork tests; not deployed |
-| **Site** | Pages for people: scoreboard, markets, proof, data, and a marked preview of backing. Anyone can connect a wallet and forecast from a market page, with no code | `public/site/`, served at `/` | Live; the backing page is a preview |
-| **Tripod** | The data layer underneath: an index of every Delphi market, trade and settlement, with replayed prices, wallet records, a live stream and a dataset | everything else in `src/`, API under `/v1`, page at `/data` | Live and self-checking |
-
 The contracts use Foundry. Install the test library once, then run the tests (the mandate tests fork Gensyn mainnet):
 
 ```bash
@@ -46,17 +84,18 @@ cd contracts && forge install foundry-rs/forge-std --no-git
 GENSYN_RPC_URL=https://gensyn-mainnet.g.alchemy.com/public forge test
 ```
 
-If your agent already trades with Gensyn's [Agentic Trading Toolkit](https://docs.delphi.fyi/tools/agentic-trading), add the Agon skill to the same project. It uses the same wallet and `.env`:
-
-```bash
-npx skills add https://github.com/neromtoobad/agon --skill agon
-```
-
-A working agent client is in `scripts/baselines.ts`:
+A working agent client in TypeScript is in `scripts/baselines.ts`:
 
 ```bash
 node scripts/baselines.ts http://localhost:8787
 ```
+
+## Open models with receipts
+
+Every model gets one public prompt per market, built from the market's text and its hash on chain. It runs inside
+REE, and the receipt names the model revision, the prompt and the output. GitHub-hosted x86 machines and an
+Apple-silicon laptop re-run each other's receipts. The models are listed in [bench/models.json](bench/models.json)
+and run by [the daily workflow](.github/workflows/benchmark.yml).
 
 The reference agent runs an open model inside REE and attaches a receipt to every forecast. The verifier re-runs receipts and reports what came out. Both need Docker and the image `gensynai/ree:v0.8.0` (pulling it accepts the REE Binary Licence), and about 8 GB of memory for Docker:
 
@@ -65,7 +104,7 @@ node scripts/reference-agent.ts http://localhost:8787 --limit 3
 node scripts/verifier.ts http://localhost:8787
 ```
 
-To add a model to the benchmark, check it runs and answers in the asked format with the probe workflow (Actions, `bench-probe`), or locally:
+To add a model, check it runs and answers in the asked format with the probe workflow (Actions, `bench-probe`), or locally:
 
 ```bash
 node scripts/reference-agent.ts https://agon.nerom.site --model <hugging-face-id> --dry-run --limit 2
@@ -73,9 +112,9 @@ node scripts/reference-agent.ts https://agon.nerom.site --model <hugging-face-id
 
 Then add it to `bench/models.json`. The daily workflow gives it its own wallet and record.
 
-`scripts/daily.sh` does both in one go against the public scoreboard, starting Docker if needed, and is meant to be run once a day by launchd or cron. `AGON_DAILY_LIMIT` sets how many markets it forecasts per run and `AGON_REE_CPUS` caps the processor cores the model may use.
+`scripts/daily.sh` does both in one go against the public server, starting Docker if needed, and is meant to be run once a day by launchd or cron. `AGON_DAILY_LIMIT` sets how many markets it forecasts per run and `AGON_REE_CPUS` caps the processor cores the model may use.
 
-# Tripod, the data layer
+# The index
 
 ## What it gives you
 
@@ -149,7 +188,7 @@ Webhooks deliver the same JSON with `x-tripod-signature: sha256=HMAC(secret, bod
 - LMSR markets: each trade event carries `exp(q_i / b)` for the traded outcome and the new sum, so `p_i = exp / sum` exactly. The other outcomes keep their ratios to each other.
 - Pari-mutuel markets: `p_i = s_i² / Σ s_j²`, where supplies start at the creator's equal seed shares and move with each trade. This is the formula in the verified contract source.
 
-**Market text** (question, outcomes, settlement criteria, data sources, judge model) is read from the metadata file the factory event points at. The factory stores the file's SHA-256 next to the URL, and Tripod checks it.
+**Market text** (question, outcomes, settlement criteria, data sources, judge model) is read from the metadata file the factory event points at. The factory stores the file's SHA-256 next to the URL, and the index checks it.
 
 **Realised profit** covers markets that are settled, failed or expired: sales + redemptions + liquidations + the estimated value of winning shares not yet redeemed, minus cost. Open markets are excluded.
 
@@ -159,7 +198,7 @@ Webhooks deliver the same JSON with `x-tripod-signature: sha256=HMAC(secret, bod
 
 ## How to verify it
 
-`node src/cli.ts verify` reads every expected value from somewhere other than Tripod's database:
+`node src/cli.ts verify` reads every expected value from somewhere other than Agon's database:
 
 1. Each factory's own market counter equals the number of markets indexed from it.
 2. Replayed probabilities equal the contracts' `spotImpliedProbabilities` for every open market.
@@ -174,13 +213,15 @@ To check a single number by hand, take any open market from `/v1/markets?status=
 
 ## Sources of truth
 
-Tripod backfills through the block explorer's log API because the public RPC allows only 100 blocks per `eth_getLogs` call. The explorer's index has holes: it can know a transaction and still hold none of its logs. So:
+The index backfills through the block explorer's log API because the public RPC allows only 100 blocks per `eth_getLogs` call. The explorer's index has holes: it can know a transaction and still hold none of its logs. So:
 
 - `repair` diffs transaction sets against Gensyn's subgraphs and re-reads missing transactions from the node.
 - `audit` walks the node's logs directly and inserts anything the explorer missed. On the public RPC a full pass takes hours; with your own RPC set `GENSYN_RPC_URL` and `TRIPOD_RPC_MAX_LOG_RANGE`.
 - Live following reads only from the node.
 
 ## Configuration
+
+The index's settings keep the `TRIPOD_` prefix from its first name, so existing deployments keep working.
 
 | Variable | Default | |
 |---|---|---|
@@ -221,7 +262,10 @@ src/derive.ts    prices, positions, wallet stats
 src/export.ts    dataset
 src/verify.ts    independent checks
 src/server.ts    API, stream, webhooks, live loop
-public/          reference page
+public/          the site
+python/          the Python package (agon-delphi on PyPI)
+skills/agon/     the Agentic Trading Toolkit skill
+contracts/       Agon.sol (the record) and Mandate.sol (backing)
 ```
 
 ## Licence
